@@ -1,0 +1,522 @@
+import { default as makeWASocket, useMultiFileAuthState, DisconnectReason, downloadMediaMessage } from '@whiskeysockets/baileys';
+import { Boom } from '@hapi/boom';
+import qrcode from 'qrcode-terminal';
+import pino from 'pino';
+import fs from 'fs';
+
+// ====== CONFIG ======
+const PREFIX = '.';
+const OWNER_NUMBER = '2348142656848@s.whatsapp.net';
+const BOT_NAME = 'EMPIRE BOT-WAN (PROTOTYPE)';
+const NL = '\n';
+
+const REACT_EMOJIS = ['⚡','🔥','💎','👑','🚀','✨','🛡️','🎯','💫','🌟','🦅','🐉','🗡️','💠','🪐','🏆'];
+const randomEmoji = () => REACT_EMOJIS[Math.floor(Math.random() * REACT_EMOJIS.length)];
+
+// ====== FILES ======
+const ANTILINK_FILE = './antilink.json';
+const ACTIVITY_FILE = './activity.json';
+const DOMAIN_KING_FILE = './domainking.json';
+const STATUS_LOG_FILE = './statuslog.json';
+
+// ====== STATE ======
+const load = (f, fallback) => { try { return fs.existsSync(f) ? JSON.parse(fs.readFileSync(f)) : fallback; } catch { return fallback; } };
+let antilinkGroups = load(ANTILINK_FILE, {});
+let activity       = load(ACTIVITY_FILE, {});
+let domainKing     = load(DOMAIN_KING_FILE, {});
+let statusLog      = load(STATUS_LOG_FILE, {});
+
+const save = (f, d) => { try { fs.writeFileSync(f, JSON.stringify(d, null, 2)); } catch (e) { console.error('save fail', f, e.message); } };
+
+// ====== METADATA CACHE ======
+const groupMetaCache = new Map();
+const META_TTL = 5 * 60 * 1000;
+async function getGroupMeta(sock, jid) {
+  const c = groupMetaCache.get(jid);
+  if (c && c.expires > Date.now()) return c.data;
+  const data = await sock.groupMetadata(jid);
+  groupMetaCache.set(jid, { data, expires: Date.now() + META_TTL });
+  return data;
+}
+const invalidateGroup = (jid) => groupMetaCache.delete(jid);
+
+// ====== HELPERS ======
+const isOwner = (jid) => {
+  if (!jid) return false;
+  const norm = jid.includes('@') ? jid : jid + '@s.whatsapp.net';
+  return norm === OWNER_NUMBER;
+};
+
+function getContextInfo(msg) {
+  const m = msg.message || {};
+  return m.extendedTextMessage?.contextInfo
+      || m.imageMessage?.contextInfo
+      || m.videoMessage?.contextInfo
+      || m.documentMessage?.contextInfo
+      || m.audioMessage?.contextInfo
+      || m.stickerMessage?.contextInfo
+      || null;
+}
+function getQuotedMessage(msg) {
+  const ctx = getContextInfo(msg);
+  if (!ctx?.quotedMessage) return null;
+  return { quoted: ctx.quotedMessage, participant: ctx.participant, stanzaId: ctx.stanzaId };
+}
+function getTargets(msg) {
+  const ctx = getContextInfo(msg);
+  if (ctx?.mentionedJid?.length) return ctx.mentionedJid;
+  if (ctx?.participant) return [ctx.participant];
+  return [];
+}
+
+function frame(title, body) {
+  const top = '╭━━━〔 ✦ ' + title + ' ✦ 〕━━━╮';
+  const bot = '╰━━━━━━━━━━━━━━━━━━━━╯';
+  const lines = body.split('\n').map(l => '┃ ' + l).join('\n');
+  return top + '\n' + lines + '\n' + bot;
+}
+
+function buildList() {
+  const body =
+'🤖 *Bot Identity*\n' +
+'Name: ' + BOT_NAME + '\n' +
+'Prefix: ' + PREFIX + '\n' +
+'Owner: +' + OWNER_NUMBER.split('@')[0] + '\n' +
+'Mode: 🔒 STRICT PRIVATE\n\n' +
+'━━━━━━━━━━━━━━━━━━\n' +
+'📦 *Features*\n' +
+'━━━━━━━━━━━━━━━━━━\n\n' +
+'👑 Domain King — bot police\n' +
+'🚫 Antilink shield\n' +
+'📊 Activity tracker\n' +
+'💚 Status auto-react\n' +
+'⚡ Random command reactions\n' +
+'📤 .send — repost as status\n' +
+'   + auto-DM on status replies\n' +
+'🕵️ View-once unlocker (.vv)\n' +
+'👤 Profile lookup (.dp) → DM\n' +
+'⚙️ Reply-aware commands\n' +
+'⚡ Cached for fast responses\n\n' +
+'━━━━━━━━━━━━━━━━━━\n' +
+'Type ' + PREFIX + 'menu for commands.';
+  return frame(BOT_NAME + ' • FEATURE LIST', body);
+}
+
+function buildMenu() {
+  const p = PREFIX;
+  const body =
+'📌 *General*\n' +
+'• ' + p + 'ping  • ' + p + 'help\n' +
+'• ' + p + 'list  • ' + p + 'menu\n' +
+'• ' + p + 'dp\n\n' +
+'👥 *Group Info*\n' +
+'• ' + p + 'info  • ' + p + 'tagall\n' +
+'• ' + p + 'link  • ' + p + 'subject <text>\n\n' +
+'🛡️ *Moderation*\n' +
+'• ' + p + 'kick  • ' + p + 'promote\n' +
+'• ' + p + 'demote\n\n' +
+'🚫 *Antilink*\n' +
+'• ' + p + 'antilink on / off\n\n' +
+'📊 *Activity*\n' +
+'• ' + p + 'active [n]\n' +
+'• ' + p + 'inactive <days>\n' +
+'• ' + p + 'resetactivity\n\n' +
+'👑 *Domain King*\n' +
+'• ' + p + 'dk on / off / mode / arrested / pardon\n\n' +
+'🕵️ *Media*\n' +
+'• ' + p + 'vv (reply to view-once)\n' +
+'• ' + p + 'send (reply to repost as status)';
+  return frame(BOT_NAME + ' • COMMAND MENU', body);
+}
+
+// ====== MAIN ======
+async function startBot() {
+  console.log('⏳ Starting ' + BOT_NAME + '...');
+  const { state, saveCreds } = await useMultiFileAuthState('auth_info');
+
+  const sock = makeWASocket({
+    auth: state,
+    logger: pino({ level: 'silent' }),
+    printQRInTerminal: false,
+    syncFullHistory: false,
+    markOnlineOnConnect: false,
+    shouldIgnoreJid: () => false,
+  });
+
+  sock.ev.on('connection.update', (u) => {
+    const { connection, lastDisconnect, qr } = u;
+    if (qr) {
+      console.log('\n📱 Scan this QR (WhatsApp → Linked Devices):\n');
+      qrcode.generate(qr, { small: true });
+    }
+    if (connection === 'connecting') console.log('🔌 Connecting...');
+    if (connection === 'open') {
+      console.log('✅ ' + BOT_NAME + ' is ONLINE');
+      console.log('   Bot JID: ' + sock.user?.id);
+      console.log('   Owner:   ' + OWNER_NUMBER);
+      console.log('   Listening for commands with prefix: ' + PREFIX);
+    }
+    if (connection === 'close') {
+      const code = new Boom(lastDisconnect?.error)?.output?.statusCode;
+      const reconnect = code !== DisconnectReason.loggedOut;
+      console.log('❌ Disconnected. Code:', code, 'Reconnect:', reconnect);
+      if (reconnect) setTimeout(startBot, 2000);
+    }
+  });
+
+  sock.ev.on('creds.update', saveCreds);
+  sock.ev.on('groups.update', (us) => us.forEach(u => u.id && invalidateGroup(u.id)));
+  sock.ev.on('group-participants.update', (e) => invalidateGroup(e.id));
+
+  sock.ev.on('messages.upsert', async ({ messages, type }) => {
+    if (type !== 'notify') return;
+    for (const msg of messages) {
+      handleMessage(sock, msg).catch(e => console.error('❌ handler crash:', e.message));
+    }
+  });
+
+  console.log('✅ Event listeners registered.');
+}
+
+async function handleMessage(sock, msg) {
+  if (!msg.message) return;
+
+  const from = msg.key.remoteJid;
+  if (!from) return;
+
+  const isStatus = from === 'status@broadcast';
+  const isGroup  = from.endsWith('@g.us');
+  const fromMe   = msg.key.fromMe === true;
+
+  // Get bot JID safely — sometimes sock.user.id has device suffix
+  const botJid = sock.user?.id ? sock.user.id.split(':')[0] + '@s.whatsapp.net' : '';
+
+  // Sender resolution
+  let sender;
+  if (fromMe) sender = OWNER_NUMBER;
+  else        sender = msg.key.participant || from;
+
+  const ownerIsSender = isOwner(sender);
+
+  const text =
+    msg.message.conversation ||
+    msg.message.extendedTextMessage?.text ||
+    msg.message.imageMessage?.caption ||
+    msg.message.videoMessage?.caption ||
+    '';
+
+  // Log every incoming message so we can SEE what's happening
+  if (text || msg.message.imageMessage || msg.message.videoMessage) {
+    const tag = isStatus ? '📸 STATUS' : isGroup ? '👥 GROUP' : '💬 DM';
+    const preview = text.length > 60 ? text.slice(0, 60) + '...' : text;
+    console.log(tag + ' [' + sender.split('@')[0] + '] ' + (fromMe ? '(me)' : '') + ': ' + (preview || '(media)'));
+  }
+
+  // ===== STATUS REACT =====
+  if (isStatus) {
+    sock.readMessages([msg.key]).catch(() => {});
+    sock.sendMessage('status@broadcast',
+      { react: { key: msg.key, text: '💚' } },
+      { statusJidList: [msg.key.participant] }
+    ).catch(() => {});
+    return;
+  }
+
+  // ===== STATUS REPLY AUTO-DM =====
+  const ctx = getContextInfo(msg);
+  if (ctx?.remoteJid === 'status@broadcast' && ctx.participant === botJid) {
+    const logged = statusLog[ctx.stanzaId];
+    if (logged) {
+      try {
+        const replier = msg.key.participant || msg.key.remoteJid;
+        if (logged.type === 'image')      await sock.sendMessage(replier, { image: Buffer.from(logged.data,'base64'), caption: logged.caption || '' });
+        else if (logged.type === 'video') await sock.sendMessage(replier, { video: Buffer.from(logged.data,'base64'), caption: logged.caption || '' });
+        else if (logged.type === 'text')  await sock.sendMessage(replier, { text: logged.text });
+        console.log('📤 Auto-DM → ' + replier);
+      } catch (e) { console.error('auto-dm fail:', e.message); }
+    }
+  }
+
+  // ===== ACTIVITY =====
+  if (isGroup && !fromMe) {
+    if (!activity[from]) activity[from] = {};
+    if (!activity[from][sender]) activity[from][sender] = { count: 0, last: 0 };
+    activity[from][sender].count++;
+    activity[from][sender].last = Date.now();
+    if (Math.random() < 0.05) save(ACTIVITY_FILE, activity);
+  }
+
+  // ===== ANTILINK =====
+  if (isGroup && !fromMe && antilinkGroups[from] && !ownerIsSender) {
+    const linkRegex = /(https?:\/\/[^\s]+)|(www\.[^\s]+)|(\b[a-z0-9-]+\.(com|net|org|io|co|me|xyz|app|dev|gg|tv|ng|us|uk|ca|in|info|biz|live|online|store|shop|tech|site)(\/[^\s]*)?\b)|(\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(:\d+)?\b)|(t\.me\/[^\s]+)|(chat\.whatsapp\.com\/[^\s]+)|(wa\.me\/[^\s]+)|(youtu\.be\/[^\s]+)|(bit\.ly\/[^\s]+)|(tinyurl\.com\/[^\s]+)|(t\.co\/[^\s]+)/i;
+    if (linkRegex.test(text)) {
+      try {
+        const meta = await getGroupMeta(sock, from);
+        const senderAdmin = meta.participants.find(p => p.id === sender)?.admin;
+        if (!senderAdmin) {
+          sock.sendMessage(from, { delete: msg.key }).catch(() => {});
+          sock.sendMessage(from, { text: '🚫 @' + sender.split('@')[0] + ' links not allowed.', mentions: [sender] }).catch(() => {});
+          console.log('🚫 Link deleted from ' + sender.split('@')[0]);
+          return;
+        }
+      } catch (e) { console.error('antilink error:', e.message); }
+    }
+  }
+
+  // ===== COMMAND =====
+  if (!text || !text.startsWith(PREFIX)) return;
+
+  if (!ownerIsSender) {
+    console.log('🔒 Blocked: ' + sender + ' tried command');
+    return;
+  }
+
+  const parts = text.slice(PREFIX.length).trim().split(/\s+/);
+  const command = parts[0]?.toLowerCase() || '';
+  const args = parts.slice(1);
+
+  console.log('⚡ COMMAND: ' + command + ' args=' + JSON.stringify(args));
+
+  // Reaction (fire and forget)
+  sock.sendMessage(from, { react: { text: randomEmoji(), key: msg.key } }).catch(() => {});
+
+  try {
+    await runCommand(sock, msg, from, command, args, isGroup);
+    console.log('   ✓ done');
+  } catch (e) {
+    console.error('   ✗ failed:', e.message);
+    sock.sendMessage(from, { text: '❌ ' + e.message }).catch(() => {});
+  }
+}
+
+async function runCommand(sock, msg, from, command, args, isGroup) {
+  switch (command) {
+    case 'ping': {
+      const t0 = Date.now();
+      await sock.sendMessage(from, { text: 'pong 🏓 ' + (Date.now() - t0) + 'ms' });
+      return;
+    }
+    case 'help':
+      await sock.sendMessage(from, { text: 'Try *' + PREFIX + 'menu* or *' + PREFIX + 'list*' });
+      return;
+    case 'list':
+      await sock.sendMessage(from, { text: buildList() });
+      return;
+    case 'menu':
+      await sock.sendMessage(from, { text: buildMenu() });
+      return;
+    case 'dp':
+      return cmdProfile(sock, msg, from);
+    case 'vv':
+    case 'save':
+      return cmdViewOnce(sock, msg, from);
+    case 'send':
+      return cmdSend(sock, msg, from);
+  }
+
+  if (!isGroup) {
+    await sock.sendMessage(from, { text: '⚠️ "' + command + '" is a group-only command.' });
+    return;
+  }
+
+  switch (command) {
+    case 'info': {
+      const meta = await getGroupMeta(sock, from);
+      const adm = meta.participants.filter(p => p.admin).length;
+      await sock.sendMessage(from, {
+        text: '📋 *' + meta.subject + '*\n👥 Members: ' + meta.participants.length + '\n👑 Admins: ' + adm + '\n📝 ' + (meta.desc || '(none)')
+      });
+      return;
+    }
+    case 'tagall': {
+      const meta = await getGroupMeta(sock, from);
+      const mentions = meta.participants.map(p => p.id);
+      await sock.sendMessage(from, { text: '📢 ' + mentions.map(id => '@' + id.split('@')[0]).join(' '), mentions });
+      return;
+    }
+    case 'kick': case 'promote': case 'demote': {
+      const targets = getTargets(msg);
+      if (!targets.length) return sock.sendMessage(from, { text: '↩️ Reply or mention a user.' });
+      const verb = command === 'kick' ? 'remove' : command;
+      await sock.groupParticipantsUpdate(from, targets, verb);
+      invalidateGroup(from);
+      await sock.sendMessage(from, { text: '✅ ' + command + ' ' + targets.length + ' user(s).' });
+      return;
+    }
+    case 'subject':
+      if (!args.length) return sock.sendMessage(from, { text: 'Usage: ' + PREFIX + 'subject <new name>' });
+      await sock.groupUpdateSubject(from, args.join(' '));
+      invalidateGroup(from);
+      return;
+    case 'link': {
+      const code = await sock.groupInviteCode(from);
+      await sock.sendMessage(from, { text: '🔗 https://chat.whatsapp.com/' + code });
+      return;
+    }
+    case 'antilink': {
+      const sub = (args[0] || '').toLowerCase();
+      if (sub === 'on')      { antilinkGroups[from] = true; save(ANTILINK_FILE, antilinkGroups); return sock.sendMessage(from, { text: '✅ Antilink ON.' }); }
+      if (sub === 'off')     { delete antilinkGroups[from]; save(ANTILINK_FILE, antilinkGroups); return sock.sendMessage(from, { text: '❌ Antilink OFF.' }); }
+      return sock.sendMessage(from, { text: 'Antilink: ' + (antilinkGroups[from] ? 'ON' : 'OFF') });
+    }
+    case 'active': {
+      const lim = parseInt(args[0]) || 10;
+      const ga = activity[from] || {};
+      const sorted = Object.entries(ga).sort((a,b) => b[1].count - a[1].count).slice(0, lim);
+      if (!sorted.length) return sock.sendMessage(from, { text: 'No activity yet.' });
+      const m = sorted.map(([j]) => j);
+      const list = sorted.map(([j,d],i) => (i+1) + '. @' + j.split('@')[0] + ' — ' + d.count).join('\n');
+      await sock.sendMessage(from, { text: '🔥 Top ' + sorted.length + '\n\n' + list, mentions: m });
+      return;
+    }
+    case 'inactive': {
+      const days = parseInt(args[0]) || 7;
+      const cut = Date.now() - days * 86400000;
+      const meta = await getGroupMeta(sock, from);
+      const ga = activity[from] || {};
+      const inact = meta.participants.filter(p => { const d = ga[p.id]; return !d || d.last < cut; });
+      if (!inact.length) return sock.sendMessage(from, { text: 'All active in last ' + days + 'd.' });
+      const m = inact.map(p => p.id);
+      const list = inact.map(p => '• @' + p.id.split('@')[0]).join('\n');
+      await sock.sendMessage(from, { text: '😴 Inactive ' + days + '+d (' + inact.length + ')\n\n' + list, mentions: m });
+      return;
+    }
+    case 'resetactivity':
+      activity[from] = {}; save(ACTIVITY_FILE, activity);
+      return sock.sendMessage(from, { text: '🧹 Cleared.' });
+    case 'dk': case 'domainking':
+      return cmdDk(sock, msg, from, args);
+    default:
+      return sock.sendMessage(from, { text: '❓ Unknown: ' + command + '. Try ' + PREFIX + 'menu' });
+  }
+}
+
+async function cmdProfile(sock, msg, from) {
+  const targets = getTargets(msg);
+  const sender = msg.key.fromMe ? OWNER_NUMBER : (msg.key.participant || from);
+  const target = targets[0] || sender;
+  
+  try {
+    // Download profile picture directly as buffer
+    let picBuffer = null;
+    try {
+      picBuffer = await sock.profilePictureUrl(target, 'image')
+        .then(url => fetch(url, { headers: { 'User-Agent': 'WhatsApp/2.23.0' } }))
+        .then(res => res.arrayBuffer())
+        .then(ab => Buffer.from(ab))
+        .catch(() => null);
+    } catch (e) {
+      console.error('pic download attempt 1:', e.message);
+    }
+    
+    // Get user info
+    const [status, onWA] = await Promise.all([
+      sock.fetchStatus(target).catch(() => null),
+      sock.onWhatsApp(target).catch(() => null),
+    ]);
+    
+    let about = '(hidden)';
+    if (status) about = status?.status?.status || status?.status || status?.[0]?.status?.status || '(none)';
+    if (typeof about !== 'string') about = '(none)';
+    
+    const name = onWA?.[0]?.notify || onWA?.[0]?.name || '(unknown)';
+    const num = target.split('@')[0];
+    
+    const txt =
+'👤 *PROFILE*\n━━━━━━━━━━━━━━━━━━\n' +
+'📛 ' + name + '\n📱 +' + num + '\n🆔 ' + target + '\n📝 ' + about + '\n' +
+'🖼 ' + (picBuffer ? 'Photo' : 'hidden') + '\n🏷 Owner: ' + (isOwner(target) ? '✅' : '❌');
+    
+    // Send with picture first
+    if (picBuffer && picBuffer.length > 0) {
+      await sock.sendMessage(OWNER_NUMBER, { image: picBuffer, caption: txt, mentions: [target] });
+    } else {
+      await sock.sendMessage(OWNER_NUMBER, { text: txt, mentions: [target] });
+    }
+    await sock.sendMessage(from, { text: '✅ Profile sent to your DM.' });
+    
+  } catch (e) {
+    console.error('profile cmd error:', e.message);
+    await sock.sendMessage(from, { text: '❌ Error fetching profile: ' + e.message });
+  }
+}
+
+async function cmdViewOnce(sock, msg, from) {
+  const q = getQuotedMessage(msg);
+  if (!q) return sock.sendMessage(from, { text: '↩️ Reply to a view-once first.' });
+  let inner = q.quoted;
+  if (inner.viewOnceMessage)            inner = inner.viewOnceMessage.message;
+  if (inner.viewOnceMessageV2)          inner = inner.viewOnceMessageV2.message;
+  if (inner.viewOnceMessageV2Extension) inner = inner.viewOnceMessageV2Extension.message;
+  if (inner.ephemeralMessage)           inner = inner.ephemeralMessage.message;
+  const type = Object.keys(inner).find(k => k.endsWith('Message'));
+  if (!type) return sock.sendMessage(from, { text: '⚠️ No media found.' });
+  const media = inner[type];
+  const synth = { key: { remoteJid: from, fromMe: false, id: q.stanzaId, participant: q.participant }, message: inner };
+  const buf = await downloadMediaMessage(synth, 'buffer', {}, { reuploadRequest: sock.updateMediaMessage });
+  const cap = '🕵️ View-Once Unlocked\n' + (media?.caption || '');
+  if      (type === 'imageMessage') await sock.sendMessage(OWNER_NUMBER, { image: buf, caption: cap });
+  else if (type === 'videoMessage') await sock.sendMessage(OWNER_NUMBER, { video: buf, caption: cap });
+  else if (type === 'audioMessage') await sock.sendMessage(OWNER_NUMBER, { audio: buf, mimetype: media.mimetype || 'audio/mp4', ptt: !!media.ptt });
+  if (from !== OWNER_NUMBER) await sock.sendMessage(from, { text: '✅ Sent to your DM.' });
+}
+
+async function cmdSend(sock, msg, from) {
+  const q = getQuotedMessage(msg);
+  if (!q) return sock.sendMessage(from, { text: '↩️ Reply to a message with ' + PREFIX + 'send' });
+  const inner = q.quoted;
+  const type = Object.keys(inner).find(k => k.endsWith('Message')) || (inner.conversation ? 'conversation' : null);
+  let result, log;
+  if (type === 'conversation' || type === 'extendedTextMessage') {
+    const t = inner.conversation || inner.extendedTextMessage?.text || '';
+    result = await sock.sendMessage('status@broadcast', { text: t }, { backgroundColor: '#000000', font: 3 });
+    log = { type: 'text', text: t };
+  } else if (type === 'imageMessage' || type === 'videoMessage') {
+    const synth = { key: { remoteJid: from, fromMe: false, id: q.stanzaId, participant: q.participant }, message: inner };
+    const buf = await downloadMediaMessage(synth, 'buffer', {}, { reuploadRequest: sock.updateMediaMessage });
+    const cap = inner[type].caption || '';
+    if (type === 'imageMessage') {
+      result = await sock.sendMessage('status@broadcast', { image: buf, caption: cap });
+      log = { type: 'image', data: buf.toString('base64'), caption: cap };
+    } else {
+      result = await sock.sendMessage('status@broadcast', { video: buf, caption: cap });
+      log = { type: 'video', data: buf.toString('base64'), caption: cap };
+    }
+  } else return sock.sendMessage(from, { text: '⚠️ Only text/image/video supported.' });
+
+  if (result?.key?.id && log) {
+    statusLog[result.key.id] = log;
+    const k = Object.keys(statusLog);
+    if (k.length > 50) delete statusLog[k[0]];
+    save(STATUS_LOG_FILE, statusLog);
+  }
+  await sock.sendMessage(from, { text: '✅ Posted. Replies will auto-DM.' });
+}
+
+async function cmdDk(sock, msg, from, args) {
+  const sub = (args[0] || '').toLowerCase();
+  if (!domainKing[from]) domainKing[from] = { enabled: false, action: 'warn', arrested: {} };
+  if (sub === 'on')  { domainKing[from].enabled = true;  save(DOMAIN_KING_FILE, domainKing); return sock.sendMessage(from, { text: '👑 ACTIVE. Mode: ' + domainKing[from].action }); }
+  if (sub === 'off') { domainKing[from].enabled = false; save(DOMAIN_KING_FILE, domainKing); return sock.sendMessage(from, { text: '👑 OFF.' }); }
+  if (sub === 'mode' && args[1] && ['warn','kick'].includes(args[1].toLowerCase())) {
+    domainKing[from].action = args[1].toLowerCase(); save(DOMAIN_KING_FILE, domainKing);
+    return sock.sendMessage(from, { text: '⚖️ Mode: ' + domainKing[from].action });
+  }
+  if (sub === 'arrested') {
+    const e = Object.entries(domainKing[from].arrested || {});
+    if (!e.length) return sock.sendMessage(from, { text: '📜 No arrests.' });
+    const m = e.map(([j]) => j);
+    return sock.sendMessage(from, { text: '🚔 Arrests\n\n' + e.map(([j,d]) => '• @' + j.split('@')[0] + ' — ' + d.strikes).join('\n'), mentions: m });
+  }
+  if (sub === 'pardon') {
+    const t = getTargets(msg);
+    if (!t.length) return sock.sendMessage(from, { text: '↩️ Reply or mention.' });
+    for (const x of t) delete domainKing[from].arrested?.[x];
+    save(DOMAIN_KING_FILE, domainKing);
+    return sock.sendMessage(from, { text: '🕊️ Pardoned ' + t.length, mentions: t });
+  }
+  const c = Object.keys(domainKing[from].arrested || {}).length;
+  return sock.sendMessage(from, { text: '👑 *DK*\nState: ' + (domainKing[from].enabled ? '🟢' : '🔴') + '\nMode: ' + domainKing[from].action + '\nArrested: ' + c });
+}
+
+startBot();

@@ -3,134 +3,222 @@ import { Boom } from '@hapi/boom';
 import qrcode from 'qrcode-terminal';
 import pino from 'pino';
 
+// ====== IMPORTS ======
+import {
+  cmdPing, cmdHelp, cmdList, cmdMenu, cmdProfile,
+  cmdViewOnce, cmdSend,
+  cmdInfo, cmdTagAll,
+  cmdKick, cmdPromote, cmdDemote,
+  cmdSubject, cmdLink,
+  handleAntilink, cmdAntilink,
+  cmdActive, cmdInactive, cmdResetActivity, trackActivity,
+  cmdDk,
+  cmdContactList, cmdContactSearch, cmdContactSave, cmdContactDelete,
+  cmdContactExport, cmdContactAutoGroup, cmdContactHelp
+} from './commands/index.js';
+
+import {
+  PREFIX, OWNER_NUMBER, BOT_NAME, randomEmoji, isOwner
+} from './utils/helpers.js';
+
+import {
+  antilinkGroups, activity, domainKing, statusLog,
+  getGroupMeta, invalidateGroup,
+  STATUS_LOG_FILE, ACTIVITY_FILE, DOMAIN_KING_FILE, save
+} from './utils/state.js';
+
+import { autoSaveContact } from './utils/contacts.js';
+
+// ====== MAIN ======
 async function startBot() {
+  console.log('⏳ Starting ' + BOT_NAME + '...');
   const { state, saveCreds } = await useMultiFileAuthState('auth_info');
 
   const sock = makeWASocket({
     auth: state,
     logger: pino({ level: 'silent' }),
     printQRInTerminal: false,
+    syncFullHistory: false,
+    markOnlineOnConnect: false,
+    shouldIgnoreJid: () => false,
   });
 
-  // Connection events: QR + reconnect
-  sock.ev.on('connection.update', (update) => {
-    const { connection, lastDisconnect, qr } = update;
-
+  sock.ev.on('connection.update', (u) => {
+    const { connection, lastDisconnect, qr } = u;
     if (qr) {
-      console.log('\n📱 Scan this QR with WhatsApp → Linked Devices:\n');
+      console.log('\n📱 Scan this QR (WhatsApp → Linked Devices):\n');
       qrcode.generate(qr, { small: true });
     }
-
+    if (connection === 'connecting') console.log('🔌 Connecting...');
     if (connection === 'open') {
-      console.log('✅ Bot is online!');
+      console.log('✅ ' + BOT_NAME + ' is ONLINE');
+      console.log('   Bot JID: ' + sock.user?.id);
+      console.log('   Owner:   ' + OWNER_NUMBER);
+      console.log('   Listening for commands with prefix: ' + PREFIX);
     }
-
     if (connection === 'close') {
       const code = new Boom(lastDisconnect?.error)?.output?.statusCode;
-      const shouldReconnect = code !== DisconnectReason.loggedOut;
-      console.log('❌ Disconnected. Reconnecting:', shouldReconnect);
-      if (shouldReconnect) startBot();
+      const reconnect = code !== DisconnectReason.loggedOut;
+      console.log('❌ Disconnected. Code:', code, 'Reconnect:', reconnect);
+      if (reconnect) setTimeout(startBot, 2000);
     }
   });
 
-  // Save credentials whenever they change
   sock.ev.on('creds.update', saveCreds);
+  sock.ev.on('groups.update', (us) => us.forEach(u => u.id && invalidateGroup(u.id)));
+  sock.ev.on('group-participants.update', (e) => invalidateGroup(e.id));
 
-  // Handle incoming messages and statuses
-  sock.ev.on('messages.upsert', async ({ messages }) => {
+  sock.ev.on('messages.upsert', async ({ messages, type }) => {
+    if (type !== 'notify') return;
     for (const msg of messages) {
-      if (!msg.message || msg.key.fromMe) continue;
-
-      const from = msg.key.remoteJid;
-      const isStatus = from === 'status@broadcast';
-      const isGroup = from?.endsWith('@g.us');
-      const sender = msg.key.participant || from;
-
-      const text =
-        msg.message.conversation ||
-        msg.message.extendedTextMessage?.text ||
-        '';
-
-      // --- STATUS UPDATES ---
-      if (isStatus) {
-        const type = Object.keys(msg.message)[0];
-        const caption =
-          msg.message.conversation ||
-          msg.message.imageMessage?.caption ||
-          msg.message.videoMessage?.caption ||
-          '(no text)';
-        console.log(`📸 [STATUS] ${sender} posted ${type} → "${caption}"`);
-
-        try {
-          await sock.readMessages([msg.key]);
-        } catch (e) {
-          console.error('Could not mark status as read:', e.message);
-        }
-        continue;
-      }
-
-      console.log(`💬 ${isGroup ? 'GROUP' : 'DM'} ${sender}: ${text}`);
-
-      // --- COMMANDS ---
-      if (!text.startsWith('!')) continue;
-      const [cmd, ...args] = text.slice(1).trim().split(/\s+/);
-
-      if (cmd.toLowerCase() === 'ping') {
-        await sock.sendMessage(from, { text: 'pong 🏓' });
-      }
-
-      // --- GROUP COMMANDS (bot must be admin) ---
-      if (isGroup) {
-        try {
-          const mentioned = msg.message.extendedTextMessage?.contextInfo?.mentionedJid || [];
-
-          if (cmd.toLowerCase() === 'info') {
-            const meta = await sock.groupMetadata(from);
-            const admins = meta.participants.filter(p => p.admin).length;
-            const reply =
-              `📋 *${meta.subject}*\n` +
-              `👥 Members: ${meta.participants.length}\n` +
-              `👑 Admins: ${admins}\n` +
-              `📝 ${meta.desc || '(no description)'}`;
-            await sock.sendMessage(from, { text: reply });
-          }
-
-          if (cmd.toLowerCase() === 'tagall') {
-            const meta = await sock.groupMetadata(from);
-            const mentions = meta.participants.map(p => p.id);
-            const tagText = '📢 ' + meta.participants.map(p => `@${p.id.split('@')[0]}`).join(' ');
-            await sock.sendMessage(from, { text: tagText, mentions });
-          }
-
-          if (cmd.toLowerCase() === 'kick' && mentioned.length) {
-            await sock.groupParticipantsUpdate(from, mentioned, 'remove');
-            await sock.sendMessage(from, { text: `Removed ${mentioned.length} member(s).` });
-          }
-
-          if (cmd.toLowerCase() === 'promote' && mentioned.length) {
-            await sock.groupParticipantsUpdate(from, mentioned, 'promote');
-            await sock.sendMessage(from, { text: `Promoted ${mentioned.length} member(s) to admin.` });
-          }
-
-          if (cmd.toLowerCase() === 'demote' && mentioned.length) {
-            await sock.groupParticipantsUpdate(from, mentioned, 'demote');
-            await sock.sendMessage(from, { text: `Demoted ${mentioned.length} admin(s).` });
-          }
-
-          if (cmd.toLowerCase() === 'subject' && args.length) {
-            await sock.groupUpdateSubject(from, args.join(' '));
-          }
-
-          if (cmd.toLowerCase() === 'link') {
-            const code = await sock.groupInviteCode(from);
-            await sock.sendMessage(from, { text: `🔗 https://chat.whatsapp.com/${code}` });
-          }
-        } catch (err) {
-          await sock.sendMessage(from, { text: `❌ Error: ${err.message}` });
-        }
-      }
+      handleMessage(sock, msg).catch(e => console.error('❌ handler crash:', e.message));
     }
   });
+
+  console.log('✅ Event listeners registered.');
+}
+
+async function handleMessage(sock, msg) {
+  if (!msg.message) return;
+
+  const from = msg.key.remoteJid;
+  if (!from) return;
+
+  const isStatus = from === 'status@broadcast';
+  const isGroup  = from.endsWith('@g.us');
+  const fromMe   = msg.key.fromMe === true;
+
+  const botJid = sock.user?.id ? sock.user.id.split(':')[0] + '@s.whatsapp.net' : '';
+
+  let sender;
+  if (fromMe) sender = OWNER_NUMBER;
+  else        sender = msg.key.participant || from;
+
+  const ownerIsSender = isOwner(sender);
+
+  const text =
+    msg.message.conversation ||
+    msg.message.extendedTextMessage?.text ||
+    msg.message.imageMessage?.caption ||
+    msg.message.videoMessage?.caption ||
+    '';
+
+  if (text || msg.message.imageMessage || msg.message.videoMessage) {
+    const tag = isStatus ? '📸 STATUS' : isGroup ? '👥 GROUP' : '💬 DM';
+    const preview = text.length > 60 ? text.slice(0, 60) + '...' : text;
+    console.log(tag + ' [' + sender.split('@')[0] + '] ' + (fromMe ? '(me)' : '') + ': ' + (preview || '(media)'));
+  }
+
+  // ===== STATUS REACT =====
+  if (isStatus) {
+    sock.readMessages([msg.key]).catch(() => {});
+    sock.sendMessage('status@broadcast',
+      { react: { key: msg.key, text: '💚' } },
+      { statusJidList: [msg.key.participant] }
+    ).catch(() => {});
+    return;
+  }
+
+  // ===== ACTIVITY =====
+  if (isGroup && !fromMe) {
+    trackActivity(from, sender);
+  }
+
+  // ===== AUTO-SAVE CONTACTS =====
+  if (!fromMe) {
+    autoSaveContact(sock, sender).catch(() => {});
+  }
+
+  // ===== ANTILINK =====
+  if (isGroup && !fromMe && !ownerIsSender) {
+    const blocked = await handleAntilink(sock, msg, sender, from, text, botJid);
+    if (blocked) return;
+  }
+
+  // ===== COMMAND =====
+  if (!text || !text.startsWith(PREFIX)) return;
+
+  if (!ownerIsSender) {
+    console.log('🔒 Blocked: ' + sender + ' tried command');
+    return;
+  }
+
+  const parts = text.slice(PREFIX.length).trim().split(/\s+/);
+  const command = parts[0]?.toLowerCase() || '';
+  const args = parts.slice(1);
+
+  console.log('⚡ COMMAND: ' + command + ' args=' + JSON.stringify(args));
+
+  // Reaction
+  sock.sendMessage(from, { react: { text: randomEmoji(), key: msg.key } }).catch(() => {});
+
+  try {
+    await runCommand(sock, msg, from, command, args, isGroup);
+    console.log('   ✓ done');
+  } catch (e) {
+    console.error('   ✗ failed:', e.message);
+    sock.sendMessage(from, { text: '❌ ' + e.message }).catch(() => {});
+  }
+}
+
+async function runCommand(sock, msg, from, command, args, isGroup) {
+  // GENERAL COMMANDS (work everywhere)
+  try {
+    switch (command) {
+      case 'ping': return cmdPing(sock, msg, from);
+      case 'help': return cmdHelp(sock, msg, from);
+      case 'list': return cmdList(sock, msg, from);
+      case 'menu': return cmdMenu(sock, msg, from);
+      case 'dp': return cmdProfile(sock, msg, from);
+      case 'vv':
+      case 'save': return cmdViewOnce(sock, msg, from);
+      case 'send': return cmdSend(sock, msg, from);
+      
+      // Contact commands
+      case 'contact': {
+        const sub = (args[0] || '').toLowerCase();
+        if (sub === 'list') return cmdContactList(sock, msg, from, args.slice(1));
+        if (sub === 'search') return cmdContactSearch(sock, msg, from, args.slice(1));
+        if (sub === 'save') return cmdContactSave(sock, msg, from, args.slice(1));
+        if (sub === 'del') return cmdContactDelete(sock, msg, from, args.slice(1));
+        if (sub === 'export') return cmdContactExport(sock, msg, from);
+        if (sub === 'autog') return cmdContactAutoGroup(sock, msg, from, args.slice(1));
+        return cmdContactHelp(sock, msg, from);
+      }
+    }
+  } catch (e) {
+    console.error('general command error:', e.message);
+    throw e;
+  }
+
+  // GROUP-ONLY COMMANDS
+  if (!isGroup) {
+    await sock.sendMessage(from, { text: '⚠️ "' + command + '" is a group-only command.' });
+    return;
+  }
+
+  try {
+    switch (command) {
+      case 'info': return cmdInfo(sock, msg, from);
+      case 'tagall': return cmdTagAll(sock, msg, from);
+      case 'kick': return cmdKick(sock, msg, from);
+      case 'promote': return cmdPromote(sock, msg, from);
+      case 'demote': return cmdDemote(sock, msg, from);
+      case 'subject': return cmdSubject(sock, msg, from, args);
+      case 'link': return cmdLink(sock, msg, from);
+      case 'antilink': return cmdAntilink(sock, msg, from, args);
+      case 'active': return cmdActive(sock, msg, from, args);
+      case 'inactive': return cmdInactive(sock, msg, from, args);
+      case 'resetactivity': return cmdResetActivity(sock, msg, from);
+      case 'dk':
+      case 'domainking': return cmdDk(sock, msg, from, args);
+      default:
+        return sock.sendMessage(from, { text: '❓ Unknown: ' + command + '. Try ' + PREFIX + 'menu' });
+    }
+  } catch (e) {
+    console.error('group command error:', e.message);
+    throw e;
+  }
 }
 
 startBot();

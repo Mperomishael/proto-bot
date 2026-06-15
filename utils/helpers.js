@@ -56,6 +56,7 @@ export function buildList() {
 '👑 Domain King — bot police\n' +
 '🚫 Antilink shield\n' +
 '📊 Activity tracker\n' +
+'⭐ Message reactions tracker\n' +
 '💚 Status auto-react\n' +
 '⚡ Random command reactions\n' +
 '📤 .send — repost as status\n' +
@@ -96,6 +97,12 @@ export function buildMenu() {
 '• ' + p + 'active [n]\n' +
 '• ' + p + 'inactive <days>\n' +
 '• ' + p + 'resetactivity\n\n' +
+'⭐ *Reactions*\n' +
+'• ' + p + 'reactions [limit]\n' +
+'• ' + p + 'reacted [date]\n' +
+'• ' + p + 'notreacted [date]\n' +
+'• ' + p + 'reactionstats [date]\n' +
+'• ' + p + 'clearreactions\n\n' +
 '👑 *Domain King*\n' +
 '• ' + p + 'dk on / off / mode / arrested / pardon\n\n' +
 '🕵️ *Media*\n' +

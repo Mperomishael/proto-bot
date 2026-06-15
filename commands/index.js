@@ -16,6 +16,7 @@ export { cmdSubject, cmdLink } from './group/subject-link.js';
 export { handleAntilink, cmdAntilink } from './antilink.js';
 export { cmdActive, cmdInactive, cmdResetActivity, trackActivity } from './activity.js';
 export { cmdDk } from './domainking.js';
+export { trackReactions, handleReactionUpdate, cmdReactions, cmdReacted, cmdNotReacted, cmdClearReactions, cmdReactionStats } from './reactions.js';
 
 // Contact commands
 export {

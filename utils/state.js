@@ -5,6 +5,7 @@ export const ANTILINK_FILE = './antilink.json';
 export const ACTIVITY_FILE = './activity.json';
 export const DOMAIN_KING_FILE = './domainking.json';
 export const STATUS_LOG_FILE = './statuslog.json';
+export const REACTIONS_FILE = './reactions.json';
 
 // ====== STATE ======
 const load = (f, fallback) => { 
@@ -19,6 +20,7 @@ export let antilinkGroups = load(ANTILINK_FILE, {});
 export let activity       = load(ACTIVITY_FILE, {});
 export let domainKing     = load(DOMAIN_KING_FILE, {});
 export let statusLog      = load(STATUS_LOG_FILE, {});
+export let reactions      = load(REACTIONS_FILE, {});
 
 export const save = (f, d) => { 
   try { 
@@ -34,6 +36,7 @@ export function reloadState() {
   activity       = load(ACTIVITY_FILE, {});
   domainKing     = load(DOMAIN_KING_FILE, {});
   statusLog      = load(STATUS_LOG_FILE, {});
+  reactions      = load(REACTIONS_FILE, {});
 }
 
 // ====== METADATA CACHE ======

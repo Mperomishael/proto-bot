@@ -1,6 +1,6 @@
 // ============================================================
 //  EMPIRE BOT-WAN (PROTOTYPE) — index.js
-//  Owner-only WhatsApp bot with pairing code + public pairing portal
+//  Owner-only WhatsApp bot with pairing code + System Control
 // ============================================================
 
 import { default as makeWASocket, useMultiFileAuthState, DisconnectReason, Browsers } from '@whiskeysockets/baileys';
@@ -20,7 +20,9 @@ import {
   cmdDk,
   trackReactions, handleReactionUpdate, cmdReactions, cmdReacted, cmdNotReacted, cmdClearReactions, cmdReactionStats,
   cmdContactList, cmdContactSearch, cmdContactSave, cmdContactDelete,
-  cmdContactExport, cmdContactAutoGroup, cmdContactHelp
+  cmdContactExport, cmdContactAutoGroup, cmdContactHelp,
+  // System Commands
+  cmdUpdate, cmdReboot 
 } from './commands/index.js';
 
 // ====== UTILITY IMPORTS ======
@@ -50,20 +52,19 @@ async function startBot() {
 
   const { state, saveCreds } = await useMultiFileAuthState('auth_info');
 
- const sock = makeWASocket({
-  auth: state,
-  logger: pino({ level: 'silent' }),
-  printQRInTerminal: false,
-  syncFullHistory: false,
-  markOnlineOnConnect: false,
-  shouldIgnoreJid: () => false,
-  browser: Browsers.ubuntu('Chrome'),  // ← changed from macOS('Safari')
-  generateHighQualityLinkPreview: false,
-  connectTimeoutMs: 60000,             // ← NEW: longer timeout for slow pairing
-  defaultQueryTimeoutMs: 60000,        // ← NEW: prevents premature query failures
-  keepAliveIntervalMs: 30000,          // ← NEW: keeps the post-pair socket alive
-});
-
+  const sock = makeWASocket({
+    auth: state,
+    logger: pino({ level: 'silent' }),
+    printQRInTerminal: false,
+    syncFullHistory: false,
+    markOnlineOnConnect: false,
+    shouldIgnoreJid: () => false,
+    browser: Browsers.ubuntu('Chrome'), 
+    generateHighQualityLinkPreview: false,
+    connectTimeoutMs: 60000,
+    defaultQueryTimeoutMs: 60000,
+    keepAliveIntervalMs: 30000,
+  });
 
   // ====== PAIRING CODE — only runs on first launch ======
   if (!state.creds.registered) {
@@ -72,49 +73,38 @@ async function startBot() {
 
   // ====== CONNECTION HANDLER ======
   sock.ev.on('connection.update', (u) => {
-  const { connection, lastDisconnect, qr } = u;
+    const { connection, lastDisconnect, qr } = u;
 
-  if (qr) {
-    console.log(String.fromCharCode(10) + '📱 Scan this QR (WhatsApp → Linked Devices):' + String.fromCharCode(10));
-    qrcode.generate(qr, { small: true });
-  }
-
-  if (connection === 'connecting') {
-    console.log('🔌 Connecting...');
-  }
-
-  if (connection === 'open') {
-    console.log('✅ ' + BOT_NAME + ' is ONLINE');
-    console.log('   Bot JID: ' + sock.user?.id);
-    console.log('   Owner:   ' + OWNER_NUMBER);
-    console.log('   Listening for commands with prefix: ' + PREFIX);
-    sendBootSuccess(sock).catch(e => console.error('boot dm:', e.message));
-  }
-
-  if (connection === 'close') {
-    const code = new Boom(lastDisconnect?.error)?.output?.statusCode;
-    const reason = lastDisconnect?.error?.message || 'unknown';
-    console.log('❌ Disconnected. Code:', code, 'Reason:', reason);
-
-    // Code 515 = "restart required" — Baileys needs to re-establish after pairing.
-    // This is the missing handler that fixes "Logging in..." getting stuck.
-    if (code === 515) {
-      console.log('🔄 Restart required after pairing — reconnecting in 2s...');
-      setTimeout(startBot, 2000);
-      return;
+    if (qr) {
+      console.log(String.fromCharCode(10) + '📱 Scan this QR (WhatsApp → Linked Devices):' + String.fromCharCode(10));
+      qrcode.generate(qr, { small: true });
     }
 
-    // Code 401 = logged out (kicked from Linked Devices) — don't reconnect
-    if (code === DisconnectReason.loggedOut) {
-      console.log('🚪 Logged out. Delete auth_info/ to re-pair.');
-      return;
+    if (connection === 'connecting') console.log('🔌 Connecting...');
+
+    if (connection === 'open') {
+      console.log('✅ ' + BOT_NAME + ' is ONLINE');
+      console.log('   Bot JID: ' + sock.user?.id);
+      console.log('   Owner:   ' + OWNER_NUMBER);
+      sendBootSuccess(sock).catch(e => console.error('boot dm:', e.message));
     }
 
-    // Everything else — reconnect
-    console.log('   Reconnecting in 2s...');
-    setTimeout(startBot, 2000);
-  }
-});
+    if (connection === 'close') {
+      const code = new Boom(lastDisconnect?.error)?.output?.statusCode;
+      const reason = lastDisconnect?.error?.message || 'unknown';
+      console.log('❌ Disconnected. Code:', code, 'Reason:', reason);
+
+      if (code === 515) {
+        console.log('🔄 Restart required after pairing — reconnecting...');
+        setTimeout(startBot, 2000);
+      } else if (code === DisconnectReason.loggedOut) {
+        console.log('🚪 Logged out. Delete auth_info/ to re-pair.');
+      } else {
+        console.log('🔄 Reconnecting in 3s...');
+        setTimeout(startBot, 3000);
+      }
+    }
+  });
 
   sock.ev.on('creds.update', saveCreds);
   sock.ev.on('groups.update', (us) => us.forEach(u => u.id && invalidateGroup(u.id)));
@@ -125,9 +115,7 @@ async function startBot() {
     updates.forEach(update => {
       try {
         handleReactionUpdate(reactions, update);
-        if (update?.key?.remoteJid) {
-          save(REACTIONS_FILE, reactions);
-        }
+        if (update?.key?.remoteJid) save(REACTIONS_FILE, reactions);
       } catch (e) {
         console.error('reaction update error:', e.message);
       }
@@ -136,7 +124,9 @@ async function startBot() {
 
   // ====== MESSAGE DISPATCHER ======
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
-    if (type !== 'notify') return;
+    // Note: Termux/Wakelock sometimes causes 'append' type for owner messages.
+    // We process both 'notify' and 'append' to ensure reliability.
+    if (type !== 'notify' && type !== 'append') return;
     for (const msg of messages) {
       handleMessage(sock, msg).catch(e => console.error('❌ handler crash:', e.message));
     }
@@ -180,61 +170,37 @@ async function handleMessage(sock, msg) {
     console.log(tag + ' [' + sender.split('@')[0] + '] ' + (fromMe ? '(me)' : '') + ': ' + (preview || '(media)'));
   }
 
-  // ===== STATUS AUTO-REACT =====
   if (isStatus) {
     sock.readMessages([msg.key]).catch(() => {});
-    sock.sendMessage('status@broadcast',
-      { react: { key: msg.key, text: '💚' } },
-      { statusJidList: [msg.key.participant] }
-    ).catch(() => {});
+    sock.sendMessage('status@broadcast', { react: { key: msg.key, text: '💚' } }, { statusJidList: [msg.key.participant] }).catch(() => {});
     return;
   }
 
-  // ===== ACTIVITY TRACKING =====
-  if (isGroup && !fromMe) {
-    trackActivity(from, sender);
-  }
+  if (isGroup && !fromMe) trackActivity(from, sender);
+  if (!fromMe) autoSaveContact(sock, sender).catch(() => {});
 
-  // ===== AUTO-SAVE CONTACTS =====
-  if (!fromMe) {
-    autoSaveContact(sock, sender).catch(() => {});
-  }
-
-  // ===== TRACK ALL GROUP MESSAGES FOR REACTION MAPPING =====
+  // ===== REACTION MAPPING =====
   if (isGroup && msg.key.id) {
-    // Track every message to prepare for reaction collection
-    if (!reactions[from]) {
-      reactions[from] = {};
-    }
-    
-    const msgInfo = reactions[from][msg.key.id];
-    if (!msgInfo) {
+    if (!reactions[from]) reactions[from] = {};
+    if (!reactions[from][msg.key.id]) {
       const today = new Date();
-      const dateStr = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + String(today.getDate()).padStart(2, '0');
       reactions[from][msg.key.id] = {
         from: sender,
         isAdmin: ownerIsSender,
         timestamp: msg.messageTimestamp || Date.now(),
-        date: dateStr,
+        date: today.toISOString().split('T')[0],
         reactions: {}
       };
-      
-      if (ownerIsSender) {
-        console.log('📌 Admin message: ' + msg.key.id.slice(0, 8) + ' (ready for reactions)');
-      }
-      
       save(REACTIONS_FILE, reactions);
     }
   }
 
-  // ===== ANTILINK =====
   if (isGroup && !fromMe && !ownerIsSender) {
     const blocked = await handleAntilink(sock, msg, sender, from, text, botJid);
     if (blocked) return;
   }
 
-  // ===== PUBLIC PAIRING (DM number → get code) =====
-  // Runs BEFORE command parser so a user can just send their number
+  // ===== PUBLIC PAIRING =====
   if (!fromMe && text) {
     const handled = await handlePublicPairRequest(sock, msg, from, sender, text);
     if (handled) return;
@@ -243,7 +209,6 @@ async function handleMessage(sock, msg) {
   // ===== COMMAND PARSER =====
   if (!text || !text.startsWith(PREFIX)) return;
 
-  // Owner-only enforcement
   if (!ownerIsSender) {
     console.log('🔒 Blocked: ' + sender + ' tried command');
     return;
@@ -254,8 +219,6 @@ async function handleMessage(sock, msg) {
   const args = parts.slice(1);
 
   console.log('⚡ COMMAND: ' + command + ' args=' + JSON.stringify(args));
-
-  // React with random emoji
   sock.sendMessage(from, { react: { text: randomEmoji(), key: msg.key } }).catch(() => {});
 
   try {
@@ -271,8 +234,6 @@ async function handleMessage(sock, msg) {
 //  COMMAND ROUTER
 // ============================================================
 async function runCommand(sock, msg, from, command, args, isGroup) {
-
-  // ===== GENERAL COMMANDS (work everywhere) =====
   try {
     switch (command) {
       case 'ping':    return cmdPing(sock, msg, from);
@@ -283,11 +244,13 @@ async function runCommand(sock, msg, from, command, args, isGroup) {
       case 'vv':
       case 'save':    return cmdViewOnce(sock, msg, from);
       case 'send':    return cmdSend(sock, msg, from);
-
-      // Public pairing (owner-issued)
       case 'pair':    return cmdPair(sock, msg, from, args);
+      
+      // System Controls
+      case 'update':  return cmdUpdate(sock, msg, from);
+      case 'reboot':
+      case 'restart': return cmdReboot(sock, msg, from);
 
-      // Contact suite
       case 'contact': {
         const sub = (args[0] || '').toLowerCase();
         if (sub === 'list')   return cmdContactList(sock, msg, from, args.slice(1));
@@ -299,16 +262,9 @@ async function runCommand(sock, msg, from, command, args, isGroup) {
         return cmdContactHelp(sock, msg, from);
       }
     }
-  } catch (e) {
-    console.error('general command error:', e.message);
-    throw e;
-  }
+  } catch (e) { throw e; }
 
-  // ===== GROUP-ONLY COMMANDS =====
-  if (!isGroup) {
-    await sock.sendMessage(from, { text: '⚠️ "' + command + '" is a group-only command.' });
-    return;
-  }
+  if (!isGroup) return;
 
   try {
     switch (command) {
@@ -330,26 +286,14 @@ async function runCommand(sock, msg, from, command, args, isGroup) {
       case 'clearreactions': return cmdClearReactions(sock, msg, from);
       case 'dk':
       case 'domainking':     return cmdDk(sock, msg, from, args);
-      default:
-        return sock.sendMessage(from, { text: '❓ Unknown: ' + command + '. Try ' + PREFIX + 'menu' });
     }
-  } catch (e) {
-    console.error('group command error:', e.message);
-    throw e;
-  }
+  } catch (e) { throw e; }
 }
 
 // ============================================================
 //  GLOBAL CRASH GUARDS
 // ============================================================
-process.on('uncaughtException', (e) => {
-  console.error('🔥 uncaughtException:', e?.message || e);
-});
-process.on('unhandledRejection', (e) => {
-  console.error('🔥 unhandledRejection:', e?.message || e);
-});
+process.on('uncaughtException', (e) => console.error('🔥 uncaughtException:', e?.message || e));
+process.on('unhandledRejection', (e) => console.error('🔥 unhandledRejection:', e?.message || e));
 
-// ============================================================
-//  BOOT
-// ============================================================
 startBot();

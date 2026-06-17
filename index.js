@@ -4,6 +4,9 @@
 // ============================================================
 import pkg from '@whiskeysockets/baileys';
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, Browsers } = pkg;
+import { Boom } from '@hapi/boom';
+import qrcode from 'qrcode-terminal';
+import pino from 'pino';
 
 // ====== COMMAND IMPORTS ======
 import {
@@ -121,8 +124,6 @@ async function startBot() {
 
   // ====== MESSAGE DISPATCHER ======
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
-    // Note: Termux/Wakelock sometimes causes 'append' type for owner messages.
-    // We process both 'notify' and 'append' to ensure reliability.
     if (type !== 'notify' && type !== 'append') return;
     for (const msg of messages) {
       handleMessage(sock, msg).catch(e => console.error('❌ handler crash:', e.message));

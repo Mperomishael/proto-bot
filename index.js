@@ -2,11 +2,8 @@
 //  EMPIRE BOT-WAN (PROTOTYPE) — index.js
 //  Owner-only WhatsApp bot with pairing code + System Control
 // ============================================================
-
-import { default as makeWASocket, useMultiFileAuthState, DisconnectReason, Browsers } from '@whiskeysockets/baileys';
-import { Boom } from '@hapi/boom';
-import qrcode from 'qrcode-terminal';
-import pino from 'pino';
+import pkg from '@whiskeysockets/baileys';
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, Browsers } = pkg;
 
 // ====== COMMAND IMPORTS ======
 import {

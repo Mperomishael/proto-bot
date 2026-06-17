@@ -28,3 +28,6 @@ export {
   cmdContactAutoGroup,
   cmdContactHelp
 } from './contacts.js';
+
+export { cmdUpdate, cmdReboot } from './admin/system.js';
+

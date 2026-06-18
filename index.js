@@ -1,15 +1,15 @@
 // ============================================================
-//  EMPIRE BOT-WAN (PROTOTYPE) — index.js (FINAL IMPORT FIX)
+//  EMPIRE BOT-WAN (PROTOTYPE) — index.js (RECTIFIED 2026)
 // ============================================================
-import pkg from '@whiskeysockets/baileys';
+import makeWASocket, { 
+  useMultiFileAuthState, 
+  DisconnectReason, 
+  Browsers 
+} from '@whiskeysockets/baileys';
 import { Boom } from '@hapi/boom';
 import qrcode from 'qrcode-terminal';
 import pino from 'pino';
 
-// This is the only way to handle all Baileys versions in 2026
-const makeWASocket = pkg.default || pkg;
-const authUtils = pkg.default || pkg;
-const { useMultiFileAuthState, DisconnectReason, Browsers } = authUtils;
 
 // ====== COMMAND IMPORTS ======
 import {

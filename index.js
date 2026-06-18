@@ -1,8 +1,15 @@
 // ============================================================
-//  EMPIRE BOT-WAN (PROTOTYPE) — index.js (RECTIFIED 2026)
+//  EMPIRE BOT-WAN (PROTOTYPE) — index.js (FIXED IMPORTS)
 // ============================================================
 import pkg from '@whiskeysockets/baileys';
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, Browsers } = pkg;
+// Destructure directly from the package object for best compatibility
+const { 
+  default: makeWASocket, 
+  useMultiFileAuthState, 
+  DisconnectReason, 
+  Browsers 
+} = pkg;
+
 import { Boom } from '@hapi/boom';
 import qrcode from 'qrcode-terminal';
 import pino from 'pino';

@@ -51,28 +51,20 @@ async function startBot() {
   });
 
   // ====== CONNECTION & PAIRING HANDLER ======
-  sock.ev.on('connection.update', async (u) => {
-    const { connection, lastDisconnect, qr } = u;
-
-    if (qr && !state.creds.registered && !pairingCodeRequested) {
-      pairingCodeRequested = true;
-      console.log('🔌 Socket stable. Waiting 8s for Safe-Fingerprint handshake...');
-      await new Promise(r => setTimeout(r, 8000));
-      try {
+        try {
+        await new Promise(r => setTimeout(r, 8000));
         const phoneDigits = OWNER_NUMBER.replace(/\D/g, '');
         const code = await sock.requestPairingCode(phoneDigits);
-        const formatted = code.match(/.{1,4}/g)?.join('-') || code;
         
-        const NL = String.fromCharCode(10);
-        console.log(NL + '╭━━━━━━━━━━━━━━━━━━━━━━━━━━╮');
-        console.log('┃   🔗 YOUR PAIRING CODE      ┃');
-        console.log('┃   👉  ' + formatted.padEnd(20) + '┃');
-        console.log('╰━━━━━━━━━━━━━━━━━━━━━━━━━━╯' + NL);
+        // Safe single-line logs to avoid SyntaxErrors
+        console.log('----------------------------');
+        console.log('🔗 YOUR PAIRING CODE: ' + code);
+        console.log('----------------------------');
       } catch (e) {
         console.error('❌ Pairing Error:', e.message);
         pairingCodeRequested = false;
       }
-    }
+
 
     if (connection === 'open') {
       console.log('✅ ' + BOT_NAME + ' is ONLINE');

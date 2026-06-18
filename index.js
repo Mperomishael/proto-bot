@@ -62,12 +62,12 @@ async function startBot() {
         const phoneDigits = OWNER_NUMBER.replace(/\D/g, '');
         const code = await sock.requestPairingCode(phoneDigits);
         const formatted = code.match(/.{1,4}/g)?.join('-') || code;
-        console.log('
-╭━━━━━━━━━━━━━━━━━━━━━━━━━━╮
-┃   🔗 YOUR PAIRING CODE      ┃
-┃   👉  ' + formatted.padEnd(20) + '┃
-╰━━━━━━━━━━━━━━━━━━━━━━━━━━╯
-');
+        
+        const NL = String.fromCharCode(10);
+        console.log(NL + '╭━━━━━━━━━━━━━━━━━━━━━━━━━━╮');
+        console.log('┃   🔗 YOUR PAIRING CODE      ┃');
+        console.log('┃   👉  ' + formatted.padEnd(20) + '┃');
+        console.log('╰━━━━━━━━━━━━━━━━━━━━━━━━━━╯' + NL);
       } catch (e) {
         console.error('❌ Pairing Error:', e.message);
         pairingCodeRequested = false;
@@ -83,9 +83,12 @@ async function startBot() {
     if (connection === 'close') {
       pairingCodeRequested = false;
       const code = new Boom(lastDisconnect?.error)?.output?.statusCode;
+      console.log('❌ Disconnected. Code: ' + code);
+      
       if (code === DisconnectReason.loggedOut) {
         console.log('🚪 Logged out. Delete auth_info/ and restart.');
       } else {
+        // Handle 440 (Conflict) or 428 (Precondition) by waiting before restart
         setTimeout(startBot, 3000);
       }
     }
@@ -183,7 +186,8 @@ async function runCommand(sock, msg, from, command, args, isGroup) {
       const mode = args[0] === 'on';
       if (!activity[from]) activity[from] = {};
       activity[from].chatMode = mode;
-      return sock.sendMessage(from, { text: `🤖 *Botwan AI Chat:* ${mode ? 'ON' : 'OFF'}` });
+      const statusText = mode ? 'Enabled' : 'Disabled';
+      return sock.sendMessage(from, { text: '🤖 *Botwan AI Chat:* ' + statusText });
     }
 
     // Bank Manager
@@ -192,17 +196,22 @@ async function runCommand(sock, msg, from, command, args, isGroup) {
 
     // System
     case 'update':  return cmdUpdate(sock, msg, from);
-    case 'reboot':  return cmdReboot(sock, msg, from);
+    case 'reboot':
+    case 'restart': return cmdReboot(sock, msg, from);
     case 'broadcast': return cmdBroadcast(sock, msg, from, args);
+    case 'pair':    return cmdPair(sock, msg, from, args);
 
     // Group (Basic)
-    case 'kick':    if(isGroup) return cmdKick(sock, msg, from);
-    case 'promote': if(isGroup) return cmdPromote(sock, msg, from);
-    case 'demote':  if(isGroup) return cmdDemote(sock, msg, from);
-    case 'antilink': if(isGroup) return cmdAntilink(sock, msg, from, args);
+    case 'kick':    if(isGroup) return cmdKick(sock, msg, from); break;
+    case 'promote': if(isGroup) return cmdPromote(sock, msg, from); break;
+    case 'demote':  if(isGroup) return cmdDemote(sock, msg, from); break;
+    case 'antilink': if(isGroup) return cmdAntilink(sock, msg, from, args); break;
   }
 }
 
+// ============================================================
+//  GLOBAL CRASH GUARDS
+// ============================================================
 process.on('uncaughtException', (e) => console.error('🔥 Critical:', e));
 process.on('unhandledRejection', (e) => console.error('🔥 Rejected:', e));
 

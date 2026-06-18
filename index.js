@@ -1,47 +1,32 @@
 // ============================================================
-//  EMPIRE BOT-WAN (PROTOTYPE) — index.js (RECTIFIED 2026)
+//  BOTWAN PROTOTYPE (EMPIRE DIGITALS) — index.js (RECTIFIED 2026)
 // ============================================================
-import makeWASocket, { 
-  useMultiFileAuthState, 
-  DisconnectReason, 
-  Browsers 
-} from '@whiskeysockets/baileys';
+import pkg from '@whiskeysockets/baileys';
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, Browsers } = pkg;
 import { Boom } from '@hapi/boom';
 import qrcode from 'qrcode-terminal';
 import pino from 'pino';
 
-
 // ====== COMMAND IMPORTS ======
 import {
   cmdPing, cmdHelp, cmdList, cmdMenu, cmdProfile,
-  cmdViewOnce, cmdSend,
-  cmdInfo, cmdTagAll,
-  cmdKick, cmdPromote, cmdDemote,
-  cmdSubject, cmdLink,
-  handleAntilink, cmdAntilink,
+  cmdViewOnce, cmdSend, cmdSteal, // Media
+  cmdInfo, cmdTagAll, cmdKick, cmdPromote, cmdDemote,
+  cmdSubject, cmdLink, cmdAntilink, handleAntilink,
   cmdActive, cmdInactive, cmdResetActivity, trackActivity,
-  cmdDk,
-  trackReactions, handleReactionUpdate, cmdReactions, cmdReacted, cmdNotReacted, cmdClearReactions, cmdReactionStats,
-  cmdContactList, cmdContactSearch, cmdContactSave, cmdContactDelete,
-  cmdContactExport, cmdContactAutoGroup, cmdContactHelp,
-  cmdUpdate, cmdReboot 
+  cmdDk, cmdReactions, cmdReactionStats,
+  cmdContactList, cmdContactSearch, cmdContactSave,
+  cmdUpdate, cmdReboot, cmdPair,
+  // NEW EMPIRE MODULES
+  cmdBankSettings, cmdShowBank, cmdBroadcast
 } from './commands/index.js';
 
-// ====== UTILITY IMPORTS ======
-import {
-  PREFIX, OWNER_NUMBER, BOT_NAME, randomEmoji, isOwner
-} from './utils/helpers.js';
-
-import {
-  reactions, invalidateGroup, REACTIONS_FILE, save
-} from './utils/state.js';
-
+import { PREFIX, OWNER_NUMBER, BOT_NAME, randomEmoji, isOwner } from './utils/helpers.js';
+import { reactions, invalidateGroup, REACTIONS_FILE, save, activity } from './utils/state.js';
 import { autoSaveContact } from './utils/contacts.js';
-
-// ====== PAIRING / WELCOME / PUBLIC PAIR ======
 import { sendBootSuccess } from './lib/welcome.js';
 import { handlePublicPairRequest } from './lib/publicPair.js';
-import { cmdPair } from './commands/pair.js';
+import { getAIResponse } from './lib/ai_logic.js';
 
 let pairingCodeRequested = false;
 
@@ -49,7 +34,7 @@ let pairingCodeRequested = false;
 //  MAIN START
 // ============================================================
 async function startBot() {
-  console.log('⏳ Starting ' + BOT_NAME + ' (Safe-Fingerprint Mode)...');
+  console.log('⏳ Starting ' + BOT_NAME + ' (Empire Digitals Edition)...');
 
   const { state, saveCreds } = await useMultiFileAuthState('auth_info');
 
@@ -59,10 +44,7 @@ async function startBot() {
     printQRInTerminal: false,
     syncFullHistory: false,
     markOnlineOnConnect: true,
-    shouldIgnoreJid: () => false,
-    // 🛡️ RECTIFIED 2026: macOS Safari is the safest fingerprint to bypass 405/428 errors
     browser: Browsers.macOS('Safari'), 
-    generateHighQualityLinkPreview: false,
     connectTimeoutMs: 60000,
     defaultQueryTimeoutMs: 60000,
     keepAliveIntervalMs: 30000,
@@ -72,32 +54,25 @@ async function startBot() {
   sock.ev.on('connection.update', async (u) => {
     const { connection, lastDisconnect, qr } = u;
 
-    // 🔗 PAIRING CODE LOGIC
     if (qr && !state.creds.registered && !pairingCodeRequested) {
       pairingCodeRequested = true;
-      console.log('🔌 Socket stable. Waiting 8s to bypass WhatsApp security checks...');
-      
+      console.log('🔌 Socket stable. Waiting 8s for Safe-Fingerprint handshake...');
+      await new Promise(r => setTimeout(r, 8000));
       try {
-        // ⏳ MANDATORY DELAY: Prevents "Method Not Allowed" (405)
-        await new Promise(r => setTimeout(r, 8000));
-        
         const phoneDigits = OWNER_NUMBER.replace(/\D/g, '');
         const code = await sock.requestPairingCode(phoneDigits);
         const formatted = code.match(/.{1,4}/g)?.join('-') || code;
-        
-        const NL = String.fromCharCode(10);
-        console.log(NL + '╭━━━━━━━━━━━━━━━━━━━━━━━━━━╮');
-        console.log('┃   🔗 YOUR PAIRING CODE      ┃');
-        console.log('┃   👉  ' + formatted.padEnd(20) + '┃');
-        console.log('╰━━━━━━━━━━━━━━━━━━━━━━━━━━╯' + NL);
-        console.log('📱 Enter this on: Linked Devices -> Link with phone number' + NL);
+        console.log('
+╭━━━━━━━━━━━━━━━━━━━━━━━━━━╮
+┃   🔗 YOUR PAIRING CODE      ┃
+┃   👉  ' + formatted.padEnd(20) + '┃
+╰━━━━━━━━━━━━━━━━━━━━━━━━━━╯
+');
       } catch (e) {
         console.error('❌ Pairing Error:', e.message);
         pairingCodeRequested = false;
       }
     }
-
-    if (connection === 'connecting') console.log('🔌 Connecting to WhatsApp...');
 
     if (connection === 'open') {
       console.log('✅ ' + BOT_NAME + ' is ONLINE');
@@ -108,20 +83,10 @@ async function startBot() {
     if (connection === 'close') {
       pairingCodeRequested = false;
       const code = new Boom(lastDisconnect?.error)?.output?.statusCode;
-      const reason = lastDisconnect?.error?.message || 'unknown';
-      
-      console.log('❌ Disconnected. Code:', code, 'Reason:', reason);
-
-      if (code === 515 || code === 428 || code === 405) {
-        // 515: Restart Required (Normal after pairing)
-        // 428/405: Handshake failure (Needs longer cooldown)
-        const cooldown = (code === 405) ? 10000 : 3000;
-        console.log(`🔄 Reconnecting in ${cooldown/1000}s...`);
-        setTimeout(startBot, cooldown);
-      } else if (code === DisconnectReason.loggedOut) {
+      if (code === DisconnectReason.loggedOut) {
         console.log('🚪 Logged out. Delete auth_info/ and restart.');
       } else {
-        setTimeout(startBot, 5000);
+        setTimeout(startBot, 3000);
       }
     }
   });
@@ -137,11 +102,8 @@ async function startBot() {
     }
   });
 
-  // Group metadata cache management
   sock.ev.on('groups.update', (us) => us.forEach(u => u.id && invalidateGroup(u.id)));
   sock.ev.on('group-participants.update', (e) => invalidateGroup(e.id));
-
-  console.log('✅ Event listeners registered.');
 }
 
 // ============================================================
@@ -151,47 +113,45 @@ async function handleMessage(sock, msg) {
   const from = msg.key.remoteJid;
   if (!from || from === 'status@broadcast') return;
 
-  const isGroup  = from.endsWith('@g.us');
-  const fromMe   = msg.key.fromMe === true;
-
+  const isGroup = from.endsWith('@g.us');
+  const fromMe = msg.key.fromMe;
+  const sender = fromMe ? OWNER_NUMBER : (msg.key.participant || from);
+  const ownerIsSender = isOwner(sender);
   const botJid = sock.user?.id ? sock.user.id.split(':')[0] + '@s.whatsapp.net' : '';
 
-  let sender;
-  if (fromMe) sender = OWNER_NUMBER;
-  else        sender = msg.key.participant || from;
+  const text = msg.message.conversation || msg.message.extendedTextMessage?.text || 
+               msg.message.imageMessage?.caption || msg.message.videoMessage?.caption || '';
 
-  const ownerIsSender = isOwner(sender);
-
-  const text =
-    msg.message.conversation ||
-    msg.message.extendedTextMessage?.text ||
-    msg.message.imageMessage?.caption ||
-    msg.message.videoMessage?.caption ||
-    '';
-
-  // Log activity
+  // 1. Log Activity
   if (isGroup && !fromMe) trackActivity(from, sender);
   if (!fromMe) autoSaveContact(sock, sender).catch(() => {});
 
-  // Antilink
-  if (isGroup && !fromMe && !ownerIsSender) {
-    const blocked = await handleAntilink(sock, msg, sender, from, text, botJid);
-    if (blocked) return;
+  // 2. # STATUS / MEDIA STEALER (Owner Only)
+  if (text === '#' && ownerIsSender && msg.message?.extendedTextMessage?.contextInfo?.quotedMessage) {
+    return cmdSteal(sock, msg, from);
   }
 
-  // Public Pairing
+  // 3. AI CHAT MODE & SWIPE DETECTION
+  const chatEnabled = activity[from]?.chatMode || false;
+  const isReplyToBot = msg.message?.extendedTextMessage?.contextInfo?.participant === botJid;
+  const isMentioned = text.includes('@' + botJid.split('@')[0]);
+
+  if (chatEnabled && (isReplyToBot || isMentioned || !isGroup)) {
+    if (!text.startsWith(PREFIX)) {
+      const aiResponse = await getAIResponse(text);
+      return sock.sendMessage(from, { text: aiResponse }, { quoted: msg });
+    }
+  }
+
+  // 4. PUBLIC PAIRING
   if (!fromMe && text && !text.startsWith(PREFIX)) {
     const handled = await handlePublicPairRequest(sock, msg, from, sender, text);
     if (handled) return;
   }
 
-  // Command Parser
-  if (!text || !text.startsWith(PREFIX)) return;
-
-  if (!ownerIsSender) {
-    console.log('🔒 Blocked: ' + sender + ' tried command');
-    return;
-  }
+  // 5. COMMAND PARSER
+  if (!text.startsWith(PREFIX)) return;
+  if (!ownerIsSender) return;
 
   const parts = text.slice(PREFIX.length).trim().split(/\s+/);
   const command = parts[0]?.toLowerCase() || '';
@@ -202,10 +162,8 @@ async function handleMessage(sock, msg) {
 
   try {
     await runCommand(sock, msg, from, command, args, isGroup);
-    console.log('   ✓ done');
   } catch (e) {
-    console.error('   ✗ failed:', e.message);
-    sock.sendMessage(from, { text: '❌ ' + e.message }).catch(() => {});
+    sock.sendMessage(from, { text: '❌ Error: ' + e.message });
   }
 }
 
@@ -213,26 +171,39 @@ async function handleMessage(sock, msg) {
 //  COMMAND ROUTER
 // ============================================================
 async function runCommand(sock, msg, from, command, args, isGroup) {
-  try {
-    switch (command) {
-      case 'ping':    return cmdPing(sock, msg, from);
-      case 'help':    return cmdHelp(sock, msg, from);
-      case 'list':    return cmdList(sock, msg, from);
-      case 'menu':    return cmdMenu(sock, msg, from);
-      case 'dp':      return cmdProfile(sock, msg, from, args);
-      case 'update':  return cmdUpdate(sock, msg, from);
-      case 'reboot':  
-      case 'restart': return cmdReboot(sock, msg, from);
-      case 'pair':    return cmdPair(sock, msg, from, args);
-      // ... add other cases as needed
+  switch (command) {
+    // General
+    case 'ping':    return cmdPing(sock, msg, from);
+    case 'help':    return cmdHelp(sock, msg, from);
+    case 'menu':    return cmdMenu(sock, msg, from);
+    case 'dp':      return cmdProfile(sock, msg, from, args);
+    
+    // AI Chat Toggle
+    case 'chat': {
+      const mode = args[0] === 'on';
+      if (!activity[from]) activity[from] = {};
+      activity[from].chatMode = mode;
+      return sock.sendMessage(from, { text: `🤖 *Botwan AI Chat:* ${mode ? 'ON' : 'OFF'}` });
     }
-  } catch (e) { throw e; }
+
+    // Bank Manager
+    case 'bank':    return cmdShowBank(sock, msg, from);
+    case 'bnk':     return cmdBankSettings(sock, msg, from, args);
+
+    // System
+    case 'update':  return cmdUpdate(sock, msg, from);
+    case 'reboot':  return cmdReboot(sock, msg, from);
+    case 'broadcast': return cmdBroadcast(sock, msg, from, args);
+
+    // Group (Basic)
+    case 'kick':    if(isGroup) return cmdKick(sock, msg, from);
+    case 'promote': if(isGroup) return cmdPromote(sock, msg, from);
+    case 'demote':  if(isGroup) return cmdDemote(sock, msg, from);
+    case 'antilink': if(isGroup) return cmdAntilink(sock, msg, from, args);
+  }
 }
 
-// ============================================================
-//  GLOBAL CRASH GUARDS
-// ============================================================
-process.on('uncaughtException', (e) => console.error('🔥 uncaughtException:', e?.message || e));
-process.on('unhandledRejection', (e) => console.error('🔥 unhandledRejection:', e?.message || e));
+process.on('uncaughtException', (e) => console.error('🔥 Critical:', e));
+process.on('unhandledRejection', (e) => console.error('🔥 Rejected:', e));
 
 startBot();

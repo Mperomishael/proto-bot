@@ -30,4 +30,8 @@ export {
 } from './contacts.js';
 
 export { cmdUpdate, cmdReboot } from './admin/system.js';
+export { cmdBankSettings, cmdShowBank } from './utils/bank.js';
+export { cmdBroadcast } from './admin/broadcast.js';
+export { cmdSteal } from './general/media.js';
+
 

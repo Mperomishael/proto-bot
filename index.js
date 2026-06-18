@@ -1,18 +1,18 @@
 // ============================================================
-//  EMPIRE BOT-WAN (PROTOTYPE) — index.js (FIXED IMPORTS)
+//  EMPIRE BOT-WAN (PROTOTYPE) — index.js (FINAL IMPORT FIX)
 // ============================================================
 import pkg from '@whiskeysockets/baileys';
-// Destructure directly from the package object for best compatibility
-const { 
-  default: makeWASocket, 
-  useMultiFileAuthState, 
-  DisconnectReason, 
-  Browsers 
-} = pkg;
-
 import { Boom } from '@hapi/boom';
 import qrcode from 'qrcode-terminal';
 import pino from 'pino';
+
+// Bulletproof destructuring for both CommonJS and ESM versions of Baileys
+const makeWASocket = pkg.default || pkg;
+const { 
+  useMultiFileAuthState, 
+  DisconnectReason, 
+  Browsers 
+} = pkg.default || pkg;
 
 // ====== COMMAND IMPORTS ======
 import {

@@ -1,8 +1,8 @@
 // ============================================================
 //  BOTWAN PROTOTYPE (EMPIRE DIGITALS) — index.js (FINAL 2026)
 // ============================================================
-import pkg from '@whiskeysockets/baileys';
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, Browsers } = pkg;
+import makeWASocket, { useMultiFileAuthState, DisconnectReason, Browsers } from '@whiskeysockets/baileys';
+
 import { Boom } from '@hapi/boom';
 import qrcode from 'qrcode-terminal';
 import pino from 'pino';

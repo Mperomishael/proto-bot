@@ -1,5 +1,5 @@
 // ============================================================
-//  BOTWAN PROTOTYPE (EMPIRE DIGITALS) — index.js (RECTIFIED 2026)
+//  BOTWAN PROTOTYPE (EMPIRE DIGITALS) — index.js (FINAL 2026)
 // ============================================================
 import pkg from '@whiskeysockets/baileys';
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, Browsers } = pkg;
@@ -10,14 +10,13 @@ import pino from 'pino';
 // ====== COMMAND IMPORTS ======
 import {
   cmdPing, cmdHelp, cmdList, cmdMenu, cmdProfile,
-  cmdViewOnce, cmdSend, cmdSteal, // Media
+  cmdViewOnce, cmdSend, cmdSteal,
   cmdInfo, cmdTagAll, cmdKick, cmdPromote, cmdDemote,
   cmdSubject, cmdLink, cmdAntilink, handleAntilink,
   cmdActive, cmdInactive, cmdResetActivity, trackActivity,
   cmdDk, cmdReactions, cmdReactionStats,
   cmdContactList, cmdContactSearch, cmdContactSave,
   cmdUpdate, cmdReboot, cmdPair,
-  // NEW EMPIRE MODULES
   cmdBankSettings, cmdShowBank, cmdBroadcast
 } from './commands/index.js';
 
@@ -30,14 +29,9 @@ import { getAIResponse } from './lib/ai_logic.js';
 
 let pairingCodeRequested = false;
 
-// ============================================================
-//  MAIN START
-// ============================================================
 async function startBot() {
-  console.log('⏳ Starting ' + BOT_NAME + ' (Empire Digitals Edition)...');
-
+  console.log('⏳ Starting ' + BOT_NAME + '...');
   const { state, saveCreds } = await useMultiFileAuthState('auth_info');
-
   const sock = makeWASocket({
     auth: state,
     logger: pino({ level: 'silent' }),
@@ -50,37 +44,33 @@ async function startBot() {
     keepAliveIntervalMs: 30000,
   });
 
-  // ====== CONNECTION & PAIRING HANDLER ======
-        try {
-        await new Promise(r => setTimeout(r, 8000));
+  sock.ev.on('connection.update', async (u) => {
+    const { connection, lastDisconnect, qr } = u;
+    if (qr && !state.creds.registered && !pairingCodeRequested) {
+      pairingCodeRequested = true;
+      console.log('🔌 Socket stable. Waiting 8s for handshake...');
+      await new Promise(r => setTimeout(r, 8000));
+      try {
         const phoneDigits = OWNER_NUMBER.replace(/\D/g, '');
         const code = await sock.requestPairingCode(phoneDigits);
-        
-        // Safe single-line logs to avoid SyntaxErrors
         console.log('----------------------------');
-        console.log('🔗 YOUR PAIRING CODE: ' + code);
+        console.log('🔗 PAIRING CODE: ' + code);
         console.log('----------------------------');
       } catch (e) {
         console.error('❌ Pairing Error:', e.message);
         pairingCodeRequested = false;
       }
-
-
+    }
     if (connection === 'open') {
       console.log('✅ ' + BOT_NAME + ' is ONLINE');
       pairingCodeRequested = false;
       sendBootSuccess(sock).catch(e => console.error('boot dm:', e.message));
     }
-
     if (connection === 'close') {
       pairingCodeRequested = false;
       const code = new Boom(lastDisconnect?.error)?.output?.statusCode;
       console.log('❌ Disconnected. Code: ' + code);
-      
-      if (code === DisconnectReason.loggedOut) {
-        console.log('🚪 Logged out. Delete auth_info/ and restart.');
-      } else {
-        // Handle 440 (Conflict) or 428 (Precondition) by waiting before restart
+      if (code !== DisconnectReason.loggedOut) {
         setTimeout(startBot, 3000);
       }
     }
@@ -88,7 +78,6 @@ async function startBot() {
 
   sock.ev.on('creds.update', saveCreds);
 
-  // ====== MESSAGE DISPATCHER ======
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
     if (type !== 'notify' && type !== 'append') return;
     for (const msg of messages) {
@@ -101,32 +90,24 @@ async function startBot() {
   sock.ev.on('group-participants.update', (e) => invalidateGroup(e.id));
 }
 
-// ============================================================
-//  MESSAGE HANDLER
-// ============================================================
 async function handleMessage(sock, msg) {
   const from = msg.key.remoteJid;
   if (!from || from === 'status@broadcast') return;
-
   const isGroup = from.endsWith('@g.us');
   const fromMe = msg.key.fromMe;
   const sender = fromMe ? OWNER_NUMBER : (msg.key.participant || from);
   const ownerIsSender = isOwner(sender);
   const botJid = sock.user?.id ? sock.user.id.split(':')[0] + '@s.whatsapp.net' : '';
-
   const text = msg.message.conversation || msg.message.extendedTextMessage?.text || 
                msg.message.imageMessage?.caption || msg.message.videoMessage?.caption || '';
 
-  // 1. Log Activity
   if (isGroup && !fromMe) trackActivity(from, sender);
   if (!fromMe) autoSaveContact(sock, sender).catch(() => {});
 
-  // 2. # STATUS / MEDIA STEALER (Owner Only)
   if (text === '#' && ownerIsSender && msg.message?.extendedTextMessage?.contextInfo?.quotedMessage) {
     return cmdSteal(sock, msg, from);
   }
 
-  // 3. AI CHAT MODE & SWIPE DETECTION
   const chatEnabled = activity[from]?.chatMode || false;
   const isReplyToBot = msg.message?.extendedTextMessage?.contextInfo?.participant === botJid;
   const isMentioned = text.includes('@' + botJid.split('@')[0]);
@@ -138,13 +119,11 @@ async function handleMessage(sock, msg) {
     }
   }
 
-  // 4. PUBLIC PAIRING
   if (!fromMe && text && !text.startsWith(PREFIX)) {
     const handled = await handlePublicPairRequest(sock, msg, from, sender, text);
     if (handled) return;
   }
 
-  // 5. COMMAND PARSER
   if (!text.startsWith(PREFIX)) return;
   if (!ownerIsSender) return;
 
@@ -152,7 +131,6 @@ async function handleMessage(sock, msg) {
   const command = parts[0]?.toLowerCase() || '';
   const args = parts.slice(1);
 
-  console.log('⚡ COMMAND: ' + command);
   sock.sendMessage(from, { react: { text: randomEmoji(), key: msg.key } }).catch(() => {});
 
   try {
@@ -162,49 +140,27 @@ async function handleMessage(sock, msg) {
   }
 }
 
-// ============================================================
-//  COMMAND ROUTER
-// ============================================================
 async function runCommand(sock, msg, from, command, args, isGroup) {
   switch (command) {
-    // General
-    case 'ping':    return cmdPing(sock, msg, from);
-    case 'help':    return cmdHelp(sock, msg, from);
-    case 'menu':    return cmdMenu(sock, msg, from);
-    case 'dp':      return cmdProfile(sock, msg, from, args);
-    
-    // AI Chat Toggle
+    case 'ping': return cmdPing(sock, msg, from);
+    case 'help': return cmdHelp(sock, msg, from);
+    case 'menu': return cmdMenu(sock, msg, from);
+    case 'dp': return cmdProfile(sock, msg, from, args);
     case 'chat': {
       const mode = args[0] === 'on';
       if (!activity[from]) activity[from] = {};
       activity[from].chatMode = mode;
-      const statusText = mode ? 'Enabled' : 'Disabled';
-      return sock.sendMessage(from, { text: '🤖 *Botwan AI Chat:* ' + statusText });
+      return sock.sendMessage(from, { text: '🤖 *Botwan AI Chat:* ' + (mode ? 'On' : 'Off') });
     }
-
-    // Bank Manager
-    case 'bank':    return cmdShowBank(sock, msg, from);
-    case 'bnk':     return cmdBankSettings(sock, msg, from, args);
-
-    // System
-    case 'update':  return cmdUpdate(sock, msg, from);
-    case 'reboot':
-    case 'restart': return cmdReboot(sock, msg, from);
+    case 'bank': return cmdShowBank(sock, msg, from);
+    case 'bnk': return cmdBankSettings(sock, msg, from, args);
+    case 'update': return cmdUpdate(sock, msg, from);
+    case 'reboot': return cmdReboot(sock, msg, from);
     case 'broadcast': return cmdBroadcast(sock, msg, from, args);
-    case 'pair':    return cmdPair(sock, msg, from, args);
-
-    // Group (Basic)
-    case 'kick':    if(isGroup) return cmdKick(sock, msg, from); break;
-    case 'promote': if(isGroup) return cmdPromote(sock, msg, from); break;
-    case 'demote':  if(isGroup) return cmdDemote(sock, msg, from); break;
-    case 'antilink': if(isGroup) return cmdAntilink(sock, msg, from, args); break;
+    case 'pair': return cmdPair(sock, msg, from, args);
   }
 }
 
-// ============================================================
-//  GLOBAL CRASH GUARDS
-// ============================================================
 process.on('uncaughtException', (e) => console.error('🔥 Critical:', e));
 process.on('unhandledRejection', (e) => console.error('🔥 Rejected:', e));
-
 startBot();

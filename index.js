@@ -6,13 +6,10 @@ import { Boom } from '@hapi/boom';
 import qrcode from 'qrcode-terminal';
 import pino from 'pino';
 
-// Bulletproof destructuring for both CommonJS and ESM versions of Baileys
+// This is the only way to handle all Baileys versions in 2026
 const makeWASocket = pkg.default || pkg;
-const { 
-  useMultiFileAuthState, 
-  DisconnectReason, 
-  Browsers 
-} = pkg.default || pkg;
+const authUtils = pkg.default || pkg;
+const { useMultiFileAuthState, DisconnectReason, Browsers } = authUtils;
 
 // ====== COMMAND IMPORTS ======
 import {

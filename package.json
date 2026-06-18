@@ -1,28 +1,20 @@
 {
-  "name": "wa-bot-tests",
+  "name": "proto-bot",
   "version": "1.0.0",
-  "description": "",
+  "description": "Empire Bot-Wan prototype",
   "main": "index.js",
+  "type": "module",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node index.js",
+    "server": "node server.js"
   },
-  
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "commonjs",
   "dependencies": {
     "@hapi/boom": "^10.0.1",
-     "@whiskeysockets/baileys": "6.7.9",
+    "@whiskeysockets/baileys": "6.7.9",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "express-rate-limit": "^7.4.0",
     "pino": "^10.3.1",
     "qrcode-terminal": "^0.12.0"
-  },
-
-  "name": "wa-bot-test",
-  "version": "1.0.0",
-  "type": "module",
-  "main": "index.js",
-  "scripts": {
-    "start": "node index.js"
   }
 }

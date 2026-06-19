@@ -1,54 +1,26 @@
-import fs from 'fs';
+import fs   from 'fs';
+import path from 'path';
 
-// ====== FILES ======
-export const ANTILINK_FILE = './antilink.json';
-export const ACTIVITY_FILE = './activity.json';
-export const DOMAIN_KING_FILE = './domainking.json';
-export const STATUS_LOG_FILE = './statuslog.json';
-export const REACTIONS_FILE = './reactions.json';
+export const REACTIONS_FILE  = 'reactions.json';
+export const ACTIVITY_FILE   = 'activity.json';
+export const ANTILINK_FILE   = 'antilink.json';
 
-// ====== STATE ======
-const load = (f, fallback) => { 
-  try { 
-    return fs.existsSync(f) ? JSON.parse(fs.readFileSync(f)) : fallback; 
-  } catch { 
-    return fallback; 
-  } 
-};
-
-export let antilinkGroups = load(ANTILINK_FILE, {});
-export let activity       = load(ACTIVITY_FILE, {});
-export let domainKing     = load(DOMAIN_KING_FILE, {});
-export let statusLog      = load(STATUS_LOG_FILE, {});
-export let reactions      = load(REACTIONS_FILE, {});
-
-export const save = (f, d) => { 
-  try { 
-    fs.writeFileSync(f, JSON.stringify(d, null, 2)); 
-  } catch (e) { 
-    console.error('save fail', f, e.message); 
-  } 
-};
-
-// Update state from exports
-export function reloadState() {
-  antilinkGroups = load(ANTILINK_FILE, {});
-  activity       = load(ACTIVITY_FILE, {});
-  domainKing     = load(DOMAIN_KING_FILE, {});
-  statusLog      = load(STATUS_LOG_FILE, {});
-  reactions      = load(REACTIONS_FILE, {});
+function loadJSON(file, fallback) {
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')); }
+  catch { return fallback; }
 }
 
-// ====== METADATA CACHE ======
-export const groupMetaCache = new Map();
-export const META_TTL = 5 * 60 * 1000;
+export const reactions = loadJSON(REACTIONS_FILE, {});
+export const activity  = loadJSON(ACTIVITY_FILE,  {});
+export const antilink  = loadJSON(ANTILINK_FILE,  {});
 
-export async function getGroupMeta(sock, jid) {
-  const c = groupMetaCache.get(jid);
-  if (c && c.expires > Date.now()) return c.data;
-  const data = await sock.groupMetadata(jid);
-  groupMetaCache.set(jid, { data, expires: Date.now() + META_TTL });
-  return data;
+export function save(file, data) {
+  fs.writeFileSync(file, JSON.stringify(data, null, 2));
 }
 
-export const invalidateGroup = (jid) => groupMetaCache.delete(jid);
+const groupCache = new Map();
+export function invalidateGroup(id) { groupCache.delete(id); }
+export async function getCachedGroup(sock, id) {
+  if (!groupCache.has(id)) groupCache.set(id, await sock.groupMetadata(id));
+  return groupCache.get(id);
+}

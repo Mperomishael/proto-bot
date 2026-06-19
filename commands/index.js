@@ -1,37 +1,42 @@
-// General commands
-export { cmdPing, cmdHelp } from './general/ping-help.js';
-export { cmdList, cmdMenu } from './general/list-menu.js';
-export { cmdProfile } from './general/profile.js';
+// General
+export { cmdPing, cmdHelp }         from './general/ping-help.js';
+export { cmdList, cmdMenu }         from './general/list-menu.js';
+export { cmdProfile }               from './general/profile.js';
+export { cmdSteal }                 from './general/media.js';
 
-// Media commands
-export { cmdViewOnce } from './media/viewOnce.js';
-export { cmdSend } from './media/send.js';
+// Media
+export { cmdViewOnce }              from './media/viewOnce.js';
+export { cmdSend }                  from './media/send.js';
 
-// Group commands
-export { cmdInfo, cmdTagAll } from './group/info.js';
-export { cmdKick, cmdPromote, cmdDemote } from './group/moderation.js';
-export { cmdSubject, cmdLink } from './group/subject-link.js';
+// Group
+export { cmdInfo, cmdTagAll }       from './group/info.js';
+export { cmdKick, cmdPromote,
+         cmdDemote }                from './group/moderation.js';
+export { cmdSubject, cmdLink }      from './group/subject-link.js';
 
-// Feature commands
-export { handleAntilink, cmdAntilink } from './antilink.js';
-export { cmdActive, cmdInactive, cmdResetActivity, trackActivity } from './activity.js';
-export { cmdDk } from './domainking.js';
-export { trackReactions, handleReactionUpdate, cmdReactions, cmdReacted, cmdNotReacted, cmdClearReactions, cmdReactionStats } from './reactions.js';
+// Features
+export { cmdAntilink,
+         handleAntilink }           from './antilink.js';
+export { cmdActive, cmdInactive,
+         cmdResetActivity,
+         trackActivity }            from './activity.js';
+export { cmdDk }                    from './domainking.js';
+export { cmdReactions,
+         cmdReactionStats,
+         trackReactions,
+         handleReactionUpdate }     from './reactions.js';
 
-// Contact commands
-export {
-  cmdContactList,
-  cmdContactSearch,
-  cmdContactSave,
-  cmdContactDelete,
-  cmdContactExport,
-  cmdContactAutoGroup,
-  cmdContactHelp
-} from './contacts.js';
+// Contacts
+export { cmdContactList,
+         cmdContactSearch,
+         cmdContactSave,
+         cmdContactDelete,
+         cmdContactExport,
+         cmdContactAutoGroup }      from './contacts.js';
 
-export { cmdUpdate, cmdReboot } from './admin/system.js';
-export { cmdBankSettings, cmdShowBank } from './utils/bank.js';
-export { cmdBroadcast } from './admin/broadcast.js';
-export { cmdSteal } from './general/media.js';
-
-
+// Admin
+export { cmdUpdate, cmdReboot }     from './admin/system.js';
+export { cmdBroadcast }             from './admin/broadcast.js';
+export { cmdBankSettings,
+         cmdShowBank }              from './utils/bank.js';
+export { cmdPair }                  from './pair.js';

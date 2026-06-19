@@ -1,7 +1,7 @@
 {
-  "name": "proto-bot",
-  "version": "1.0.0",
-  "description": "Empire Bot-Wan prototype",
+  "name": "bot-wan-v2",
+  "version": "2.0.0",
+  "description": "Empire Bot-Wan V2 — production-ready WhatsApp bot",
   "main": "index.js",
   "type": "module",
   "scripts": {

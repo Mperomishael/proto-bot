@@ -1,24 +1,32 @@
 import "dotenv/config";
 
-export const PREFIX = process.env.PREFIX || ".";
-export const OWNER_NUMBER = process.env.OWNER_NUMBER || "";
-export const BOT_NAME = process.env.BOT_NAME || "EMPIRE BOT-WAN V2";
+// ============================================================
+// HELPERS — utils/helpers.js  (EMPIRE BOT-WAN)
+// ============================================================
+
+export const PREFIX       = process.env.PREFIX        || ".";
+export const OWNER_NUMBER = process.env.OWNER_NUMBER  || "2348142656848";
+export const BOT_NAME     = process.env.BOT_NAME      || "EMPIRE BOT-WAN V2";
 
 export const REACT_EMOJIS = ["⚡","🔥","💎","👑","🚀","✨","🛡️","🎯","💫","🌟"];
-export const randomEmoji = () => REACT_EMOJIS[Math.floor(Math.random() * REACT_EMOJIS.length)];
+export const randomEmoji  = () =>
+  REACT_EMOJIS[Math.floor(Math.random() * REACT_EMOJIS.length)];
 
+// FIX: strip non-digits from both sides so full JID "2348142656848@s.whatsapp.net"
+// correctly matches OWNER_NUMBER "2348142656848" — without this fix owner commands
+// were silently blocked because the === comparison always returned false.
 export const isOwner = (jid) => {
   if (!jid) return false;
-  const norm = jid.includes("@") ? jid : jid + "@s.whatsapp.net";
-  return norm === OWNER_NUMBER;
+  const digits = (s) => String(s).replace(/\D/g, "");
+  return digits(jid) === digits(OWNER_NUMBER);
 };
 
 export function getContextInfo(msg) {
   const m = msg.message || {};
   return (m.extendedTextMessage && m.extendedTextMessage.contextInfo)
-      || (m.imageMessage && m.imageMessage.contextInfo)
-      || (m.videoMessage && m.videoMessage.contextInfo)
-      || (m.stickerMessage && m.stickerMessage.contextInfo)
+      || (m.imageMessage        && m.imageMessage.contextInfo)
+      || (m.videoMessage        && m.videoMessage.contextInfo)
+      || (m.stickerMessage      && m.stickerMessage.contextInfo)
       || null;
 }
 
@@ -31,21 +39,21 @@ export function getQuotedMessage(msg) {
 export function getTargets(msg) {
   const ctx = getContextInfo(msg);
   if (ctx && ctx.mentionedJid && ctx.mentionedJid.length) return ctx.mentionedJid;
-  if (ctx && ctx.participant) return [ctx.participant];
+  if (ctx && ctx.participant)                             return [ctx.participant];
   return [];
 }
 
 export function frame(title, body) {
-  const top = "╭━━━〔 ✦ " + title + " ✦ 〕━━━╮";
-  const bot = "╰━━━━━━━━━━━━━━━━━━━━╯";
-  const lines = body.split("\n").map(function(l){ return "┃ " + l; }).join("\n");
+  const top   = "╭━━━〔 ✦ " + title + " ✦ 〕━━━╮";
+  const bot   = "╰━━━━━━━━━━━━━━━━━━━━╯";
+  const lines = body.split("\n").map((l) => "┃ " + l).join("\n");
   return top + "\n" + lines + "\n" + bot;
 }
 
 export function buildList() {
   const body = [
     "🤖 *Bot Identity*",
-    "Name: " + BOT_NAME,
+    "Name: "   + BOT_NAME,
     "Prefix: " + PREFIX,
     "Owner: +" + OWNER_NUMBER.split("@")[0],
     "Mode: 🔒 STRICT PRIVATE",
@@ -58,13 +66,13 @@ export function buildList() {
     "⭐ Reactions tracker",
     "📇 Auto-save contacts",
     "",
-    "Type " + PREFIX + "menu for commands."
+    "Type " + PREFIX + "menu for commands.",
   ].join("\n");
   return frame(BOT_NAME + " - FEATURE LIST", body);
 }
 
 export function buildMenu() {
-  const p = PREFIX;
+  const p    = PREFIX;
   const body = [
     "📌 *General*",
     "• " + p + "ping  • " + p + "help  • " + p + "menu",
@@ -91,7 +99,7 @@ export function buildMenu() {
     "",
     "⚙️ *Admin*",
     "• " + p + "reboot  • " + p + "update  • " + p + "broadcast",
-    "• " + p + "bank  • " + p + "bnk  • " + p + "pair <number>"
+    "• " + p + "bank  • " + p + "bnk  • " + p + "pair",
   ].join("\n");
   return frame(BOT_NAME + " - COMMAND MENU", body);
 }

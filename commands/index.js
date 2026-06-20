@@ -25,5 +25,5 @@ export { cmdContactList, cmdContactSearch, cmdContactSave, cmdContactDelete, cmd
 // Admin
 export { cmdReboot, cmdUpdate } from './admin/system.js';
 export { cmdBroadcast }         from './admin/broadcast.js';
-export { cmdBank, cmdBnk }      from './utils/bank.js';
+export { cmdBankSettings, cmdShowBank } from './utils/bank.js';
 export { cmdPair }              from './pair.js';

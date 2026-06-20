@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import fs from 'fs';                                // needed to wipe auth_info on bad codes
+import fs from 'fs';
 import pkg from '@whiskeysockets/baileys';
 import { Boom } from '@hapi/boom';
 import pino from 'pino';
@@ -23,33 +23,56 @@ const cmdMap = new Map();
 for (const [k, fn] of Object.entries(allCmds))
   if (k.startsWith('cmd')) cmdMap.set(k.slice(3).toLowerCase(), fn);
 
-// ─── Wipe auth_info and restart fresh ────────────────────────────────────────
+// ─── Retry / backoff state ────────────────────────────────────────────────────
+// Codes where the session is permanently rejected — must wipe and re-pair
+const BAD_SESSION_CODES = new Set([401, 403, 405, 411, 500]);
+const MAX_RETRIES  = 3;          // stop after 3 wipe attempts
+const BACKOFF_SECS = 45;         // wait 45 s × attempt before each retry
+let   retryCount   = 0;
+let   pairingCodeRequested = false;
+
 function wipeAndRestart(reason) {
-  console.log(`\n🗑️  ${reason} — wiping auth_info/ and restarting fresh...\n`);
+  retryCount++;
+  if (retryCount > MAX_RETRIES) {
+    console.log('\n──────────────────────────────────────────────');
+    console.log(`❌ STOPPED after ${MAX_RETRIES} failed attempts.`);
+    console.log('');
+    console.log('WhatsApp keeps rejecting the connection.');
+    console.log('This usually means your number is temporarily');
+    console.log('rate-limited. Please wait 10–30 minutes then');
+    console.log('run:  npm start');
+    console.log('──────────────────────────────────────────────\n');
+    process.exit(1);
+  }
+
+  const delaySecs = retryCount * BACKOFF_SECS;
+  console.log('\n──────────────────────────────────────────────');
+  console.log(`⚠️  ${reason}`);
+  console.log(`🗑️  Wiping auth_info/ (attempt ${retryCount}/${MAX_RETRIES})...`);
+  console.log(`⏳ Waiting ${delaySecs}s before reconnecting...`);
+  console.log('──────────────────────────────────────────────\n');
+
   try { fs.rmSync('auth_info', { recursive: true, force: true }); } catch {}
-  setTimeout(startBot, 2000);
+  setTimeout(startBot, delaySecs * 1000);
 }
 
-// Codes that mean the current session is permanently broken — must re-pair
-const BAD_SESSION_CODES = new Set([
-  401,  // loggedOut
-  403,  // forbidden / banned
-  405,  // ← the error you're seeing: session conflict / method not allowed
-  411,  // multidevice mismatch
-  500,  // bad session / corrupted creds
-]);
-
-let pairingCodeRequested = false;
-
 async function startBot() {
-  console.log(`⏳ Starting ${BOT_NAME}...`);
+  pairingCodeRequested = false;
+  console.log(`⏳ Starting ${BOT_NAME} (attempt ${retryCount + 1})...`);
+
   const { state, saveCreds } = await useMultiFileAuthState('auth_info');
+
   const sock = makeWASocket({
-    auth: state, logger: pino({ level: 'silent' }),
-    printQRInTerminal: false, syncFullHistory: false,
-    markOnlineOnConnect: true, browser: Browsers.macOS('Safari'),
-    connectTimeoutMs: 60000, defaultQueryTimeoutMs: 60000,
-    keepAliveIntervalMs: 30000, maxMsgRetryCount: 2,
+    auth: state,
+    logger: pino({ level: 'silent' }),
+    printQRInTerminal: true,      // QR fallback if pairing code fails
+    syncFullHistory:   false,
+    markOnlineOnConnect: true,
+    browser: Browsers.macOS('Safari'),
+    connectTimeoutMs:      60000,
+    defaultQueryTimeoutMs: 60000,
+    keepAliveIntervalMs:   30000,
+    maxMsgRetryCount:      2,
   });
 
   sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
@@ -57,44 +80,42 @@ async function startBot() {
     // ── Pairing code request ──────────────────────────────────────────────────
     if (qr && !state.creds.registered && !pairingCodeRequested) {
       pairingCodeRequested = true;
-      console.log('🔌 Socket stable — waiting 8 s for handshake...');
+      console.log('🔌 Socket stable — waiting 8 s then requesting pairing code...');
       await new Promise(r => setTimeout(r, 8000));
       try {
         const code = await sock.requestPairingCode(OWNER_NUMBER.replace(/\D/g, ''));
-        console.log('\n──────────────────────────────');
-        console.log(`🔗 PAIRING CODE: ${code}`);
-        console.log('──────────────────────────────\n');
-        console.log('👉 In WhatsApp → Linked Devices → Link with phone number → enter code above');
+        console.log('\n──────────────────────────────────');
+        console.log(`🔗 PAIRING CODE:  ${code}`);
+        console.log('──────────────────────────────────');
+        console.log('👉 WhatsApp → Linked Devices → Link with phone number\n');
       } catch (e) {
-        console.error('❌ Pairing error:', e.message);
+        console.error('❌ Pairing code error:', e.message);
+        console.log('📱 Scan the QR code printed above instead.');
         pairingCodeRequested = false;
       }
     }
 
     // ── Connected ─────────────────────────────────────────────────────────────
     if (connection === 'open') {
+      retryCount = 0;   // ← reset on success so future drops start fresh
       console.log(`\n✅ ${BOT_NAME} is ONLINE 🚀\n`);
-      pairingCodeRequested = false;
-      sendBootSuccess(sock).catch(e => console.error('boot msg failed:', e.message));
+      sendBootSuccess(sock).catch(() => {});
     }
 
     // ── Disconnected ─────────────────────────────────────────────────────────
     if (connection === 'close') {
-      pairingCodeRequested = false;
       const code = new Boom(lastDisconnect?.error)?.output?.statusCode;
       console.log(`🔌 Disconnected — code ${code}`);
 
       if (BAD_SESSION_CODES.has(code)) {
-        // Session is permanently broken — wipe and re-pair
-        wipeAndRestart(`Code ${code}: session invalid / rejected by WhatsApp`);
+        wipeAndRestart(`Code ${code}: session rejected by WhatsApp`);
       } else if (code === 515) {
-        // restartRequired — reconnect with SAME creds (no wipe needed)
-        console.log('🔄 Restart requested by server — reconnecting...');
-        setTimeout(startBot, 2000);
-      } else {
-        // Transient network drop — reconnect with same creds
-        console.log(`🔄 Network drop — reconnecting in 3 s...`);
+        console.log('🔄 Server requested restart — reconnecting in 3 s...');
         setTimeout(startBot, 3000);
+      } else {
+        const wait = Math.min(5000 + retryCount * 5000, 30000);
+        console.log(`🔄 Network drop — reconnecting in ${wait / 1000} s...`);
+        setTimeout(startBot, wait);
       }
     }
   });
@@ -133,19 +154,16 @@ async function handleMessage(sock, msg) {
   if (allCmds.handleAntilink && isGroup && !isOwnerMsg)
     await allCmds.handleAntilink(sock, msg, from, sender);
 
-  // steal: reply any message with '#'
   if (text === '#' && isOwnerMsg
       && msg.message?.extendedTextMessage?.contextInfo?.quotedMessage)
     return allCmds.cmdSteal(sock, msg, from);
 
-  // AI chat mode
   const chatOn      = activity[from]?.chatMode;
   const isRBot      = msg.message?.extendedTextMessage?.contextInfo?.participant === botJid;
   const isMentioned = text.includes('@' + botJid.split('@')[0]);
   if (chatOn && !text.startsWith(PREFIX) && (isRBot || isMentioned || !isGroup))
     return sock.sendMessage(from, { text: await getAIResponse(text) }, { quoted: msg });
 
-  // public pair requests
   if (!fromMe && text && !text.startsWith(PREFIX))
     if (await handlePublicPairRequest(sock, msg, from, sender, text)) return;
 
@@ -162,7 +180,6 @@ async function handleMessage(sock, msg) {
 async function runCommand(sock, msg, from, command, args, isGroup) {
   const resolved = ALIASES[command] || command;
 
-  // .contact subcommand routing
   if (resolved === 'contact') {
     const sub = (args[0] || '').toLowerCase();
     const subFns = {
@@ -178,7 +195,6 @@ async function runCommand(sock, msg, from, command, args, isGroup) {
       : sock.sendMessage(from, { text: '📇 Subcommands: list | search | save | delete | export | autogroup' });
   }
 
-  // .chat on/off AI toggle
   if (command === 'chat') {
     const on = args[0] === 'on';
     if (!activity[from]) activity[from] = {};
@@ -186,7 +202,6 @@ async function runCommand(sock, msg, from, command, args, isGroup) {
     return sock.sendMessage(from, { text: `🤖 *AI Chat:* ${on ? 'On ✅' : 'Off ❌'}` });
   }
 
-  // auto-dispatch everything else via cmdMap
   const fn = cmdMap.get(resolved);
   if (fn) return fn(sock, msg, from, args, isGroup);
 

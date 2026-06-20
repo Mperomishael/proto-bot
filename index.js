@@ -1,7 +1,5 @@
 import 'dotenv/config';
-import makeWASocket, {
-  useMultiFileAuthState, DisconnectReason, Browsers
-} from '@whiskeysockets/baileys';
+import pkg from '@whiskeysockets/baileys';
 import { Boom } from '@hapi/boom';
 import pino from 'pino';
 import * as allCmds from './commands/index.js';
@@ -12,10 +10,18 @@ import { sendBootSuccess } from './lib/welcome.js';
 import { handlePublicPairRequest } from './lib/publicPair.js';
 import { getAIResponse } from './lib/ai_logic.js';
 
-// Short aliases (user types .vv/.bank/.bnk but exports are cmdViewOnce/cmdShowBank/cmdBankSettings)
+// ─── Baileys CJS→ESM interop ──────────────────────────────────────────────────
+// When Node.js ESM imports a CJS package, module.exports becomes pkg.default.
+// The fallback (pkg itself) handles older Baileys builds that expose the fn directly.
+const makeWASocket = pkg.default ?? pkg;
+const { useMultiFileAuthState, DisconnectReason, Browsers } = pkg;
+
+// ─── Command aliases ─────────────────────────────────────────────────────────
+// User types .vv / .bank / .bnk  →  maps to cmdViewOnce / cmdShowBank / cmdBankSettings
 const ALIASES = { vv: 'viewonce', bank: 'showbank', bnk: 'banksettings' };
 
-// Auto-build command map: cmdKick → 'kick', cmdViewOnce → 'viewonce', etc.
+// ─── Auto-build command map ───────────────────────────────────────────────────
+// cmdKick → 'kick',  cmdViewOnce → 'viewonce', etc.
 const cmdMap = new Map();
 for (const [k, fn] of Object.entries(allCmds))
   if (k.startsWith('cmd')) cmdMap.set(k.slice(3).toLowerCase(), fn);
@@ -41,7 +47,10 @@ async function startBot() {
       try {
         const code = await sock.requestPairingCode(OWNER_NUMBER.replace(/\D/g, ''));
         console.log(`\n🔗 PAIRING CODE: ${code}\n`);
-      } catch (e) { console.error('❌ Pairing error:', e.message); pairingCodeRequested = false; }
+      } catch (e) {
+        console.error('❌ Pairing error:', e.message);
+        pairingCodeRequested = false;
+      }
     }
     if (connection === 'open') {
       console.log(`✅ ${BOT_NAME} is ONLINE`);
@@ -54,7 +63,9 @@ async function startBot() {
       if (code !== DisconnectReason.loggedOut) {
         console.log(`🔄 Reconnecting... (code ${code})`);
         setTimeout(startBot, 3000);
-      } else console.log('🚪 Logged out. Delete auth_info and restart.');
+      } else {
+        console.log('🚪 Logged out. Delete auth_info/ and restart.');
+      }
     }
   });
 
@@ -98,13 +109,13 @@ async function handleMessage(sock, msg) {
     return allCmds.cmdSteal(sock, msg, from);
 
   // AI chat mode
-  const chatOn     = activity[from]?.chatMode;
-  const isRBot     = msg.message?.extendedTextMessage?.contextInfo?.participant === botJid;
+  const chatOn      = activity[from]?.chatMode;
+  const isRBot      = msg.message?.extendedTextMessage?.contextInfo?.participant === botJid;
   const isMentioned = text.includes('@' + botJid.split('@')[0]);
   if (chatOn && !text.startsWith(PREFIX) && (isRBot || isMentioned || !isGroup))
     return sock.sendMessage(from, { text: await getAIResponse(text) }, { quoted: msg });
 
-  // public pair requests
+  // public pair requests (non-command flow)
   if (!fromMe && text && !text.startsWith(PREFIX))
     if (await handlePublicPairRequest(sock, msg, from, sender, text)) return;
 
@@ -114,14 +125,14 @@ async function handleMessage(sock, msg) {
   const command = parts[0]?.toLowerCase() || '';
   const args    = parts.slice(1);
   sock.sendMessage(from, { react: { text: randomEmoji(), key: msg.key } }).catch(() => {});
-  try { await runCommand(sock, msg, from, command, args, isGroup); }
+  try   { await runCommand(sock, msg, from, command, args, isGroup); }
   catch (e) { sock.sendMessage(from, { text: `❌ Error in .${command}: ${e.message}` }); }
 }
 
 async function runCommand(sock, msg, from, command, args, isGroup) {
   const resolved = ALIASES[command] || command;
 
-  // .contact <sub> — subcommand routing
+  // .contact <sub> ── subcommand routing
   if (resolved === 'contact') {
     const sub = (args[0] || '').toLowerCase();
     const subFns = {
@@ -137,7 +148,7 @@ async function runCommand(sock, msg, from, command, args, isGroup) {
       : sock.sendMessage(from, { text: '📇 Subcommands: list | search | save | delete | export | autogroup' });
   }
 
-  // .chat on/off — AI toggle
+  // .chat on/off ── AI toggle
   if (command === 'chat') {
     const on = args[0] === 'on';
     if (!activity[from]) activity[from] = {};
@@ -145,12 +156,12 @@ async function runCommand(sock, msg, from, command, args, isGroup) {
     return sock.sendMessage(from, { text: `🤖 *AI Chat:* ${on ? 'On ✅' : 'Off ❌'}` });
   }
 
-  // auto-dispatch all other commands via cmdMap
+  // auto-dispatch everything else via cmdMap
   const fn = cmdMap.get(resolved);
   if (fn) return fn(sock, msg, from, args, isGroup);
 
   await sock.sendMessage(from, {
-    text: `❓ Unknown command: *${command}*\nType ${PREFIX}menu for the full list.`
+    text: `❓ Unknown command: *${command}*\nType ${PREFIX}menu for the full list.`,
   });
 }
 
